@@ -1,0 +1,27 @@
+# Dependencies and build output
+**/node_modules/
+**/dist/
+**/.npm-cache/
+
+# Runtime data (contains meetings, users and sessions)
+meeting-minutes-server/data/
+data/
+
+# Local tooling
+.workbuddy/
+.vscode/
+.idea/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs and packages
+*.log
+*.tar.gz
+*.zip
+
+# Operating system files
+.DS_Store
+Thumbs.db
