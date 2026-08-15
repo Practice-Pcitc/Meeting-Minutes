@@ -12,6 +12,7 @@ import SummaryPanel from './components/SummaryPanel.vue'
 import TodoPanel from './components/TodoPanel.vue'
 import EntryEditor from './components/EntryEditor.vue'
 import PersonnelModal from './components/PersonnelModal.vue'
+import LabelModal from './components/LabelModal.vue'
 import NotificationCenter from './components/NotificationCenter.vue'
 import MeetingArchive from './components/MeetingArchive.vue'
 import SeatingChart from './components/SeatingChart.vue'
@@ -25,8 +26,8 @@ const notify = useNotify()
 const activeTab = ref('minutes')
 const activeView = ref('timeline')
 const showPersonnelModal = ref(false)
+const showLabelModal = ref(false)
 const showSummaryPanel = ref(true)
-const newTagInput = ref('')
 const meetingDraft = ref(null)
 let meetingSaveTimer = null
 
@@ -97,21 +98,6 @@ async function createMeeting() {
   } catch (e) { notify.error(e.message) }
 }
 
-async function addTag() {
-  const name = newTagInput.value.trim()
-  if (!name) return
-  try {
-    await store.addLabel({ name })
-    newTagInput.value = ''
-  } catch (e) {
-    notify.error(e.message)
-  }
-}
-
-async function removeTag(id) {
-  await store.removeLabel(id)
-}
-
 function setMeeting(patch) {
   store.state.data.meeting = { ...store.meeting.value, ...patch }
   meetingDraft.value = { ...(meetingDraft.value || {}), ...patch }
@@ -138,12 +124,14 @@ function setMeeting(patch) {
   <div v-else class="app-layout">
     <TheSidebar
       @open-personnel="showPersonnelModal = true"
+      @open-label="showLabelModal = true"
       @new-meeting="createMeeting"
       @open-settings="activeTab = 'settings'"
       @open-archive="activeTab = 'archive'"
       @logout="handleLogout"
     />
     <div class="app-main">
+      <AppBreadcrumb :items="breadcrumbs" @navigate="navigateBreadcrumb" />
       <TheHeader
         :active-tab="activeTab"
         :tabs="tabs"
@@ -151,7 +139,6 @@ function setMeeting(patch) {
         @toggle-summary="toggleSummary"
         @open-personnel="showPersonnelModal = true"
       />
-      <AppBreadcrumb :items="breadcrumbs" @navigate="navigateBreadcrumb" />
       <div v-if="store.state.error" class="connection-error">
         {{ store.state.error }}
         <button @click="store.loadAll()">重试</button>
@@ -243,12 +230,15 @@ function setMeeting(patch) {
         <SeatingChart v-else-if="activeTab === 'seating'" />
 
         <!-- 智能摘要 Tab -->
-        <SummaryPanel v-else-if="activeTab === 'summary'" :fullpage="true" @toggle="toggleSummary" />
+        <div v-else-if="activeTab === 'summary'" class="summary-tab">
+          <SummaryPanel :fullpage="true" @toggle="toggleSummary" />
+        </div>
 
         <!-- 设置 Tab -->
         <div v-else-if="activeTab === 'settings'" class="settings-tab">
-          <h3>会议设置</h3>
-          <div class="settings-form">
+          <div class="settings-content">
+            <h3>会议设置</h3>
+            <div class="settings-form">
             <div class="form-row">
               <label>会议标题</label>
               <input class="input" :value="store.meeting.value.title" @input="setMeeting({ title: $event.target.value })" />
@@ -271,25 +261,11 @@ function setMeeting(patch) {
               <label>地点</label>
               <input class="input" :value="store.meeting.value.location" @input="setMeeting({ location: $event.target.value })" />
             </div>
-            <div class="form-row">
-              <label>标签</label>
-              <div class="tag-manager">
-                <span v-for="l in store.labels.value" :key="l.id" class="tag-chip">
-                  {{ l.name }}
-                  <button class="tag-remove" @click="removeTag(l.id)">✕</button>
-                </span>
-                <input
-                  class="tag-input"
-                  v-model="newTagInput"
-                  placeholder="+ 添加标签，回车确认"
-                  @keydown.enter="addTag"
-                />
+              <div class="form-row danger-row">
+                <button class="btn btn-danger" @click="handleReset">
+                  <SvgIcon name="trash" :size="14" /> 清空所有数据
+                </button>
               </div>
-            </div>
-            <div class="form-row danger-row">
-              <button class="btn btn-danger" @click="handleReset">
-                <SvgIcon name="trash" :size="14" /> 清空所有数据
-              </button>
             </div>
           </div>
         </div>
@@ -298,6 +274,7 @@ function setMeeting(patch) {
 
     <!-- 人员管理弹窗 -->
     <PersonnelModal v-if="showPersonnelModal" @close="showPersonnelModal = false" />
+    <LabelModal v-if="showLabelModal" @close="showLabelModal = false" />
     <NotificationCenter />
   </div>
 </template>
@@ -453,13 +430,20 @@ function setMeeting(patch) {
 }
 .empty-tab .empty-icon { margin-bottom: 12px; color: var(--text-muted); }
 
+.summary-tab,
 .settings-tab {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
+}
+.summary-tab {
+  background: var(--bg-secondary);
+}
+.settings-content {
   padding: 24px;
   max-width: 680px;
 }
-.settings-tab h3 {
+.settings-content h3 {
   font-size: 1.1rem;
   margin-bottom: 20px;
 }
@@ -483,42 +467,6 @@ function setMeeting(patch) {
   gap: 16px;
 }
 .form-row-inline .form-row { flex: 1; }
-.tag-manager {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  min-height: 40px;
-}
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  background: var(--primary-light);
-  color: var(--primary);
-  font-size: .8rem;
-  font-weight: 500;
-}
-.tag-remove {
-  font-size: .72rem;
-  opacity: .5;
-  transition: var(--transition);
-}
-.tag-remove:hover { opacity: 1; color: var(--danger); }
-.tag-input {
-  border: none;
-  outline: none;
-  font-size: .82rem;
-  min-width: 80px;
-  flex: 1;
-  background: transparent;
-  color: var(--text);
-}
 .danger-row {
   margin-top: 12px;
   padding-top: 16px;

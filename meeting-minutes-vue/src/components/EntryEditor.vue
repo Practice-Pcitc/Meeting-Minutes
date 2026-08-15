@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useStore } from '../composables/useStore'
 
 const store = useStore()
@@ -12,6 +12,7 @@ function nowDateTimeLocal() {
 
 const content = ref('')
 const time = ref(nowDateTimeLocal())
+const isTimeManual = ref(false)
 const speakerId = ref('')
 const topic = ref('')
 const isExpanded = ref(false)
@@ -20,7 +21,37 @@ const errorMsg = ref('')
 
 const topicNames = computed(() => store.topics.value.map(t => t.name))
 
-function setNow() { time.value = nowDateTimeLocal() }
+let clockTimer = null
+
+function updateCurrentTime() {
+  if (!isTimeManual.value) time.value = nowDateTimeLocal()
+}
+
+function setNow() {
+  isTimeManual.value = false
+  time.value = nowDateTimeLocal()
+}
+
+function handleSpeakerShortcut(e) {
+  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return
+  const shortcutNumber = Number(e.key)
+  if (shortcutNumber < 1 || shortcutNumber > 9) return
+  const person = store.persons.value[shortcutNumber - 1]
+  if (!person) return
+  e.preventDefault()
+  speakerId.value = person.id
+}
+
+onMounted(() => {
+  updateCurrentTime()
+  clockTimer = window.setInterval(updateCurrentTime, 1000)
+  window.addEventListener('keydown', handleSpeakerShortcut)
+})
+
+onBeforeUnmount(() => {
+  if (clockTimer) window.clearInterval(clockTimer)
+  window.removeEventListener('keydown', handleSpeakerShortcut)
+})
 
 async function handleSubmit() {
   const text = content.value.trim()
@@ -39,7 +70,7 @@ async function handleSubmit() {
     })
     content.value = ''
     topic.value = ''
-    time.value = nowDateTimeLocal()
+    setNow()
     // speakerId 保持选中，方便连续记录
   } catch (e) {
     errorMsg.value = e.message
@@ -70,7 +101,12 @@ function focusEditor() { isExpanded.value = true }
         </select>
       </div>
 
-      <input type="datetime-local" v-model="time" class="time-input" />
+      <input
+        v-model="time"
+        type="datetime-local"
+        class="time-input"
+        @input="isTimeManual = true"
+      />
 
       <input
         v-model="topic"

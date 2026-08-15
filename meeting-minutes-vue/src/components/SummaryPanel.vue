@@ -138,12 +138,13 @@ async function toggleTodo(todo) {
       <div class="summary-section">
         <div class="section-title"><SvgIcon name="users" :size="14" /> 参会人员</div>
         <div class="attendee-list">
-          <div v-for="p in store.persons.value" :key="p.id" class="attendee-item">
+          <div v-for="(p, index) in store.persons.value" :key="p.id" class="attendee-item">
             <div class="avatar attendee-avatar-sm" :style="{ background: p.color }">{{ p.name.charAt(0) }}</div>
             <div class="attendee-info">
               <span class="attendee-name">{{ p.name }}</span>
               <span v-if="p.role" class="attendee-role">{{ p.role }}</span>
             </div>
+            <kbd v-if="index < 9" class="attendee-shortcut">Ctrl+{{ index + 1 }}</kbd>
           </div>
         </div>
       </div>
@@ -168,6 +169,7 @@ async function toggleTodo(todo) {
   border-left: none;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  overflow: visible;
 }
 
 .panel-header {
@@ -276,6 +278,19 @@ async function toggleTodo(todo) {
 .attendee-info { display: flex; flex-direction: column; }
 .attendee-name { font-size: .82rem; font-weight: 500; }
 .attendee-role { font-size: .7rem; color: var(--text-muted); }
+.attendee-shortcut {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  font-family: inherit;
+  font-size: .68rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
 
 .empty-hint { font-size: .82rem; color: var(--text-muted); padding: 8px 0; }
 </style>

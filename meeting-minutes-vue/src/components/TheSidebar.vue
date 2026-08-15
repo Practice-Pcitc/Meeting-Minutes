@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useStore } from '../composables/useStore'
 import { useAuth } from '../composables/useAuth'
 
-const emit = defineEmits(['open-personnel', 'new-meeting', 'open-settings', 'open-archive', 'logout'])
+const emit = defineEmits(['open-personnel', 'open-label', 'new-meeting', 'open-settings', 'open-archive', 'logout'])
 const store = useStore()
 const { auth } = useAuth()
 const showUserMenu = ref(false)
@@ -25,9 +25,7 @@ function newMeeting() {
   emit('new-meeting')
 }
 
-function addLabel() {
-  emit('open-settings')
-}
+function addLabel() { emit('open-label') }
 </script>
 
 <template>
@@ -65,7 +63,7 @@ function addLabel() {
           {{ l.name }}
         </button>
         <div v-if="store.labels.value.length === 0" class="empty-hint" @click="addLabel">
-          去设置页添加标签
+          点击添加标签
         </div>
       </div>
     </div>
