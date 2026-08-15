@@ -5,10 +5,36 @@ import { useNotify } from '../composables/useNotify'
 
 const store = useStore()
 const notify = useNotify()
-const rows = 9
-const cols = 13
+const DEFAULT_ROWS = 9
+const DEFAULT_COLS = 13
+const SIZE_KEY = 'meeting_minutes_seating_size'
+const savedSize = (() => {
+  try { return JSON.parse(localStorage.getItem(SIZE_KEY)) || {} } catch { return {} }
+})()
+const rows = ref(normalizeSize(savedSize.rows, DEFAULT_ROWS, 1, 20))
+const cols = ref(normalizeSize(savedSize.cols, DEFAULT_COLS, 1, 30))
 const selected = ref(null)
 const saving = ref(false)
+const draggedSeat = ref(null)
+
+function normalizeSize(value, fallback, min, max) {
+  const number = Number(value)
+  return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback
+}
+
+function updateSize(axis, event) {
+  const limit = axis === 'rows' ? 20 : 30
+  const next = normalizeSize(event.target.value, axis === 'rows' ? rows.value : cols.value, 1, limit)
+  const occupiedMinimum = store.seats.value.reduce((max, seat) => Math.max(max, (axis === 'rows' ? seat.row : seat.col) + 1), 1)
+  if (next < occupiedMinimum) {
+    notify.error(`已有人员位于第 ${occupiedMinimum} ${axis === 'rows' ? '行' : '列'}，请先移动该座位`)
+    event.target.value = axis === 'rows' ? rows.value : cols.value
+    return
+  }
+  if (axis === 'rows') rows.value = next
+  else cols.value = next
+  localStorage.setItem(SIZE_KEY, JSON.stringify({ rows: rows.value, cols: cols.value }))
+}
 
 const seatMap = computed(() => {
   const map = new Map()
@@ -35,6 +61,25 @@ function personColor(name) {
 }
 function selectSeat(row, col) { selected.value = { row, col } }
 
+function startDrag(row, col) {
+  const seat = seatAt(row, col)
+  if (seat) draggedSeat.value = { row, col, personId: seat.personId }
+}
+
+async function dropSeat(row, col) {
+  const source = draggedSeat.value
+  draggedSeat.value = null
+  if (!source || saving.value || (source.row === row && source.col === col)) return
+  const target = seatAt(row, col)
+  saving.value = true
+  try {
+    if (target) await store.updateSeat(source.row, source.col, target.personId)
+    await store.updateSeat(row, col, source.personId)
+    notify.success(target ? '座位已交换' : '座位已移动')
+  } catch (e) { notify.error(e.message) }
+  finally { saving.value = false }
+}
+
 async function assign(personId) {
   if (!selected.value || saving.value) return
   saving.value = true
@@ -58,19 +103,29 @@ async function clearAll() {
 <template>
   <div class="seating-page">
     <div class="seating-header">
-      <div><h2>会议座位图</h2><p>点击棋盘交叉点，为参会人员安排座位</p></div>
-      <div class="seating-stats"><span>{{ assignedCount }}/{{ store.persons.value.length }} 人已安排</span><button class="btn btn-ghost btn-sm" :disabled="!store.seats.value.length" @click="clearAll">清空座位</button></div>
+      <div><h2>会议座位图</h2><p>点击空位安排人员，拖动已安排的座位可移动或交换</p></div>
+      <div class="seating-actions">
+        <div class="size-controls">
+          <label>行 <input type="number" min="1" max="20" :value="rows" @change="updateSize('rows', $event)" /></label>
+          <label>列 <input type="number" min="1" max="30" :value="cols" @change="updateSize('cols', $event)" /></label>
+        </div>
+        <div class="seating-stats"><span>{{ assignedCount }}/{{ store.persons.value.length }} 人已安排</span><button class="btn btn-ghost btn-sm" :disabled="!store.seats.value.length" @click="clearAll">清空座位</button></div>
+      </div>
     </div>
 
     <div v-if="store.persons.value.length" class="seating-layout">
       <div class="board-wrap">
-        <div class="room-front"><span>主讲区 / 屏幕</span></div>
         <div class="seat-grid" :style="{ '--rows': rows, '--cols': cols }">
           <button
             v-for="index in rows * cols" :key="index"
             class="seat-cell" :class="{ occupied: personAt(Math.floor((index - 1) / cols), (index - 1) % cols) }"
             :style="personAt(Math.floor((index - 1) / cols), (index - 1) % cols) ? { background: personColor(personAt(Math.floor((index - 1) / cols), (index - 1) % cols).name) } : null"
             :aria-label="personAt(Math.floor((index - 1) / cols), (index - 1) % cols)?.name || `空座位 ${Math.floor((index - 1) / cols) + 1}-${(index - 1) % cols + 1}`"
+            :draggable="Boolean(personAt(Math.floor((index - 1) / cols), (index - 1) % cols))"
+            @dragstart="startDrag(Math.floor((index - 1) / cols), (index - 1) % cols)"
+            @dragend="draggedSeat = null"
+            @dragover.prevent
+            @drop.prevent="dropSeat(Math.floor((index - 1) / cols), (index - 1) % cols)"
             @click="selectSeat(Math.floor((index - 1) / cols), (index - 1) % cols)"
           >
             <template v-if="personAt(Math.floor((index - 1) / cols), (index - 1) % cols)">
@@ -98,10 +153,10 @@ async function clearAll() {
 </template>
 
 <style scoped>
-.seating-page { flex: 1; overflow: auto; padding: 24px; background: var(--bg-secondary); }.seating-header { max-width: 1120px; margin: 0 auto 18px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }.seating-header h2 { font-size: 1.2rem; }.seating-header p { color: var(--text-muted); font-size: .82rem; margin-top: 3px; }.seating-stats { display: flex; align-items: center; gap: 12px; color: var(--text-secondary); font-size: .8rem; }
-.seating-layout { max-width: 1120px; margin: auto; display: grid; grid-template-columns: minmax(600px,1fr) 230px; gap: 18px; align-items: start; }.board-wrap,.seat-legend { background: var(--surface); border: 1px solid var(--border-light); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }.board-wrap { padding: 22px; }.room-front { display: flex; justify-content: center; margin-bottom: 18px; }.room-front span { min-width: 260px; text-align: center; padding: 7px 20px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: .78rem; }
-.seat-grid { width: min(100%,820px); margin: auto; display: grid; grid-template-columns: repeat(var(--cols),minmax(44px,1fr)); gap: 7px; padding: 12px; background: #e5e7eb; border: 1px solid #d1d5db; border-radius: 10px; overflow-x: auto; }.seat-cell { aspect-ratio: 1; min-width: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 3px; color: #6b7280; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 7px; transition: transform .15s ease,box-shadow .15s ease,background .15s ease; }.seat-cell:hover { transform: translateY(-2px); color: var(--primary); background: #e5e7eb; box-shadow: 0 4px 9px rgba(15,23,42,.12); }.seat-cell.occupied { color: #fff; border-color: rgba(0,0,0,.08); box-shadow: inset 0 -3px 7px rgba(0,0,0,.16); }.seat-cell.occupied:hover { color: #fff; filter: brightness(1.06); }.empty-label { font-size: .68rem; opacity: .72; }.cell-avatar { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: rgba(255,255,255,.2); font-size: .74rem; font-weight: 800; }.cell-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .65rem; font-weight: 600; }
+.seating-page { flex: 1; overflow: auto; padding: 24px; background: var(--bg-secondary); }.seating-header { max-width: 1120px; margin: 0 auto 18px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }.seating-header h2 { font-size: 1.2rem; }.seating-header p { color: var(--text-muted); font-size: .82rem; margin-top: 3px; }.seating-actions { display: flex; align-items: center; gap: 16px; }.size-controls { display: flex; gap: 8px; }.size-controls label { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: .78rem; }.size-controls input { width: 52px; padding: 5px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }.seating-stats { display: flex; align-items: center; gap: 12px; color: var(--text-secondary); font-size: .8rem; }
+.seating-layout { max-width: 1120px; margin: auto; display: grid; grid-template-columns: minmax(600px,1fr) 230px; gap: 18px; align-items: start; }.board-wrap,.seat-legend { background: var(--surface); border: 1px solid var(--border-light); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }.board-wrap { padding: 22px; }
+.seat-grid { width: min(100%,820px); margin: auto; display: grid; grid-template-columns: repeat(var(--cols),minmax(44px,1fr)); gap: 7px; padding: 12px; background: #e5e7eb; border: 1px solid #d1d5db; border-radius: 10px; overflow-x: auto; }.seat-cell { aspect-ratio: 1; min-width: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 3px; color: #6b7280; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 7px; transition: transform .15s ease,box-shadow .15s ease,background .15s ease; }.seat-cell[draggable="true"] { cursor: grab; }.seat-cell[draggable="true"]:active { cursor: grabbing; }.seat-cell:hover { transform: translateY(-2px); color: var(--primary); background: #e5e7eb; box-shadow: 0 4px 9px rgba(15,23,42,.12); }.seat-cell.occupied { color: #fff; border-color: rgba(0,0,0,.08); box-shadow: inset 0 -3px 7px rgba(0,0,0,.16); }.seat-cell.occupied:hover { color: #fff; filter: brightness(1.06); }.empty-label { font-size: .68rem; opacity: .72; }.cell-avatar { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: rgba(255,255,255,.2); font-size: .74rem; font-weight: 800; }.cell-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .65rem; font-weight: 600; }
 .seat-legend { padding: 16px; }.seat-legend h3 { font-size: .9rem; margin-bottom: 12px; }.legend-person { display: flex; gap: 9px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-light); }.legend-person:last-child { border: 0; }.legend-avatar,.picker-avatar { width: 30px; height: 30px; display: grid; place-items: center; flex-shrink: 0; color: #fff; border-radius: 50%; font-weight: 600; }.legend-person div,.picker-person>span:last-child { min-width: 0; display: flex; flex-direction: column; }.legend-person strong,.picker-person strong { font-size: .82rem; }.legend-person small,.picker-person small { color: var(--text-muted); font-size: .7rem; }
 .seating-empty { margin: 90px auto; text-align: center; color: var(--text-muted); }.seating-empty h3 { margin: 12px 0 4px; color: var(--text-secondary); }.picker-overlay { position: fixed; inset: 0; z-index: 500; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.52); }.seat-picker { width: min(420px,100%); max-height: 80vh; display: flex; flex-direction: column; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }.picker-header { display: flex; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--border); }.picker-header h3 { font-size: 1rem; }.picker-header p { color: var(--text-muted); font-size: .75rem; }.picker-list { overflow-y: auto; padding: 8px; }.picker-person { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px; text-align: left; border-radius: var(--radius-sm); }.picker-person:hover,.picker-person.current { background: var(--primary-light); }.clear-seat { margin: 8px 18px 18px; justify-content: center; }
-@media (max-width: 900px) { .seating-layout { grid-template-columns: 1fr; }.seat-legend { display: grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap: 0 16px; }.seat-legend h3 { grid-column: 1/-1; } }
+@media (max-width: 900px) { .seating-header,.seating-actions { align-items: flex-start; flex-direction: column; }.seating-layout { grid-template-columns: 1fr; }.seat-legend { display: grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap: 0 16px; }.seat-legend h3 { grid-column: 1/-1; } }
 </style>

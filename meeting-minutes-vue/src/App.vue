@@ -1,5 +1,6 @@
 <script setup>
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useStore } from './composables/useStore'
 import { useAuth } from './composables/useAuth'
 import LoginPage from './components/LoginPage.vue'
@@ -23,8 +24,11 @@ const store = useStore()
 const MindMapView = defineAsyncComponent(() => import('./components/MindMapView.vue'))
 const { auth, isAuthenticated, logout } = useAuth()
 const notify = useNotify()
-const activeTab = ref('minutes')
-const activeView = ref('timeline')
+const route = useRoute()
+const router = useRouter()
+const minuteViews = new Set(['timeline', 'speaker', 'topic', 'mindmap'])
+const activeTab = computed(() => route.meta.tab || 'minutes')
+const activeView = computed(() => minuteViews.has(route.query.view) ? route.query.view : 'timeline')
 const showPersonnelModal = ref(false)
 const showLabelModal = ref(false)
 const showSummaryPanel = ref(true)
@@ -32,13 +36,30 @@ const meetingDraft = ref(null)
 let meetingSaveTimer = null
 
 watch(isAuthenticated, async (loggedIn) => {
-  if (loggedIn) await store.loadAll()
-  else store.clearState()
+  if (loggedIn) {
+    await store.loadAll()
+    if (route.name === 'login') {
+      const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/minutes'
+      await router.replace(redirect)
+    }
+  } else {
+    store.clearState()
+    if (auth.ready && route.name !== 'login') {
+      await router.replace({ name: 'login', query: { redirect: route.fullPath } })
+    }
+  }
+}, { immediate: true })
+
+watch(() => auth.ready, (ready) => {
+  if (ready && !isAuthenticated.value && route.name !== 'login') {
+    router.replace({ name: 'login', query: { redirect: route.fullPath } })
+  }
 }, { immediate: true })
 
 async function handleLogout() {
   await logout()
   store.clearState()
+  await router.replace({ name: 'login' })
 }
 
 const tabs = [
@@ -76,10 +97,14 @@ const breadcrumbs = computed(() => {
   ]
 })
 
-function switchTab(key) { activeTab.value = key }
-function switchView(key) { activeView.value = key }
+function switchTab(key) {
+  router.push(key === 'minutes' ? { name: 'minutes' } : { name: key })
+}
+function switchView(key) {
+  router.push({ name: 'minutes', query: key === 'timeline' ? {} : { view: key } })
+}
 function toggleSummary() { showSummaryPanel.value = !showSummaryPanel.value }
-function navigateBreadcrumb(action) { activeTab.value = action }
+function navigateBreadcrumb(action) { switchTab(action) }
 
 async function handleReset() {
   const confirmed = await notify.confirm({ title: '清空当前会议', message: '将清空当前会议的人员、记录、主题、待办和标签，其他历史会议不受影响。', confirmText: '清空', danger: true })
@@ -93,7 +118,7 @@ async function handleReset() {
 async function createMeeting() {
   try {
     await store.createMeeting('')
-    activeTab.value = 'minutes'
+    await router.push({ name: 'minutes' })
     notify.success('已创建一份新纪要，原会议已保存到历史记录')
   } catch (e) { notify.error(e.message) }
 }
@@ -126,8 +151,8 @@ function setMeeting(patch) {
       @open-personnel="showPersonnelModal = true"
       @open-label="showLabelModal = true"
       @new-meeting="createMeeting"
-      @open-settings="activeTab = 'settings'"
-      @open-archive="activeTab = 'archive'"
+      @open-settings="switchTab('settings')"
+      @open-archive="switchTab('archive')"
       @logout="handleLogout"
     />
     <div class="app-main">
@@ -225,7 +250,7 @@ function setMeeting(patch) {
         <!-- 待办事项 Tab -->
         <TodoPanel v-else-if="activeTab === 'todos'" />
 
-        <MeetingArchive v-else-if="activeTab === 'archive'" @open-meeting="activeTab = 'minutes'" />
+        <MeetingArchive v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" />
 
         <SeatingChart v-else-if="activeTab === 'seating'" />
 
