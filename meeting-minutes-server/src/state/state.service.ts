@@ -144,13 +144,11 @@ export class StateService implements OnModuleInit {
   private get state(): MeetingDocument {
     const current = this.workspace.meetings.find((item) => item.meeting.id === this.workspace.activeMeetingId);
     if (current) return current;
-    this.workspace = this.newWorkspace();
-    return this.workspace.meetings[0];
+    return emptyMeetingDocument('');
   }
 
   private newWorkspace(): WorkspaceState {
-    const id = uuid();
-    return { activeMeetingId: id, meetings: [emptyMeetingDocument(id)] };
+    return { activeMeetingId: '', meetings: [] };
   }
 
   private normalizeDocument(raw: any): MeetingDocument {
@@ -209,14 +207,23 @@ export class StateService implements OnModuleInit {
         entryCount: item.entries.length,
         personCount: item.persons.length,
         todoCount: item.todos.length,
+        labels: item.labels.map((label) => ({ ...label })),
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       }));
   }
 
-  createMeeting(title = ''): StatePayload {
+  createMeeting(input: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean } = {}): StatePayload {
+    const previous = this.state;
     const id = uuid();
-    this.workspace.meetings.push(emptyMeetingDocument(id, title));
+    const document = emptyMeetingDocument(id, input.title || '');
+    for (const key of ['date', 'startTime', 'endTime', 'location'] as const) {
+      if (typeof input[key] === 'string') document.meeting[key] = input[key]!.trim();
+    }
+    if (input.copyPersons) {
+      document.persons = previous.persons.map((person) => ({ ...person, id: uuid() }));
+    }
+    this.workspace.meetings.push(document);
     this.workspace.activeMeetingId = id;
     this.persist();
     return this.getState();
@@ -256,7 +263,7 @@ export class StateService implements OnModuleInit {
   }
 
   updateSeat(row: number, col: number, personId: string | null) {
-    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row > 18 || col > 18) {
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || col < 0 || row > 19 || col > 29) {
       throw new BadRequestException('座位坐标无效');
     }
     this.assertPerson(personId);

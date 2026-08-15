@@ -131,8 +131,8 @@ async function resetAll() {
   return mutate('POST', '/reset');
 }
 
-async function createMeeting(title = '') {
-  return mutate('POST', '/meetings', { title });
+async function createMeeting(input = {}) {
+  return mutate('POST', '/meetings', input);
 }
 
 async function selectMeeting(id) {

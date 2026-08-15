@@ -66,16 +66,24 @@ function startDrag(row, col) {
   if (seat) draggedSeat.value = { row, col, personId: seat.personId }
 }
 
+function startPersonDrag(personId) {
+  const seat = store.seats.value.find((item) => item.personId === personId)
+  draggedSeat.value = seat
+    ? { row: seat.row, col: seat.col, personId }
+    : { row: null, col: null, personId }
+}
+
 async function dropSeat(row, col) {
   const source = draggedSeat.value
   draggedSeat.value = null
   if (!source || saving.value || (source.row === row && source.col === col)) return
   const target = seatAt(row, col)
+  if (target?.personId === source.personId) return
   saving.value = true
   try {
-    if (target) await store.updateSeat(source.row, source.col, target.personId)
+    if (target && source.row !== null) await store.updateSeat(source.row, source.col, target.personId)
     await store.updateSeat(row, col, source.personId)
-    notify.success(target ? '座位已交换' : '座位已移动')
+    notify.success(target && source.row !== null ? '座位已交换' : '座位已安排')
   } catch (e) { notify.error(e.message) }
   finally { saving.value = false }
 }
@@ -136,7 +144,7 @@ async function clearAll() {
           </button>
         </div>
       </div>
-      <aside class="seat-legend"><h3>参会人员</h3><div v-for="p in store.persons.value" :key="p.id" class="legend-person"><span class="legend-avatar" :style="{ background: personColor(p.name) }">{{ p.name.charAt(0) }}</span><div><strong>{{ p.name }}</strong><small>{{ assignedIds.has(p.id) ? '已安排' : '未安排' }}{{ p.role ? ` · ${p.role}` : '' }}</small></div></div></aside>
+      <aside class="seat-legend"><h3>参会人员</h3><div v-for="p in store.persons.value" :key="p.id" class="legend-person" draggable="true" @dragstart="startPersonDrag(p.id)" @dragend="draggedSeat = null"><span class="legend-avatar" :style="{ background: personColor(p.name) }">{{ p.name.charAt(0) }}</span><div><strong>{{ p.name }}</strong><small>{{ assignedIds.has(p.id) ? '已安排 · 可拖动调整' : '未安排 · 拖到座位' }}{{ p.role ? ` · ${p.role}` : '' }}</small></div></div></aside>
     </div>
     <div v-else class="seating-empty"><SvgIcon name="users" :size="48" /><h3>还没有参会人员</h3><p>请先在“管理人员”中添加参会人员，再进行座位安排。</p></div>
 
@@ -156,7 +164,7 @@ async function clearAll() {
 .seating-page { flex: 1; overflow: auto; padding: 24px; background: var(--bg-secondary); }.seating-header { max-width: 1120px; margin: 0 auto 18px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }.seating-header h2 { font-size: 1.2rem; }.seating-header p { color: var(--text-muted); font-size: .82rem; margin-top: 3px; }.seating-actions { display: flex; align-items: center; gap: 16px; }.size-controls { display: flex; gap: 8px; }.size-controls label { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: .78rem; }.size-controls input { width: 52px; padding: 5px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }.seating-stats { display: flex; align-items: center; gap: 12px; color: var(--text-secondary); font-size: .8rem; }
 .seating-layout { max-width: 1120px; margin: auto; display: grid; grid-template-columns: minmax(600px,1fr) 230px; gap: 18px; align-items: start; }.board-wrap,.seat-legend { background: var(--surface); border: 1px solid var(--border-light); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }.board-wrap { padding: 22px; }
 .seat-grid { width: min(100%,820px); margin: auto; display: grid; grid-template-columns: repeat(var(--cols),minmax(44px,1fr)); gap: 7px; padding: 12px; background: #e5e7eb; border: 1px solid #d1d5db; border-radius: 10px; overflow-x: auto; }.seat-cell { aspect-ratio: 1; min-width: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 3px; color: #6b7280; background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 7px; transition: transform .15s ease,box-shadow .15s ease,background .15s ease; }.seat-cell[draggable="true"] { cursor: grab; }.seat-cell[draggable="true"]:active { cursor: grabbing; }.seat-cell:hover { transform: translateY(-2px); color: var(--primary); background: #e5e7eb; box-shadow: 0 4px 9px rgba(15,23,42,.12); }.seat-cell.occupied { color: #fff; border-color: rgba(0,0,0,.08); box-shadow: inset 0 -3px 7px rgba(0,0,0,.16); }.seat-cell.occupied:hover { color: #fff; filter: brightness(1.06); }.empty-label { font-size: .68rem; opacity: .72; }.cell-avatar { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: rgba(255,255,255,.2); font-size: .74rem; font-weight: 800; }.cell-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .65rem; font-weight: 600; }
-.seat-legend { padding: 16px; }.seat-legend h3 { font-size: .9rem; margin-bottom: 12px; }.legend-person { display: flex; gap: 9px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-light); }.legend-person:last-child { border: 0; }.legend-avatar,.picker-avatar { width: 30px; height: 30px; display: grid; place-items: center; flex-shrink: 0; color: #fff; border-radius: 50%; font-weight: 600; }.legend-person div,.picker-person>span:last-child { min-width: 0; display: flex; flex-direction: column; }.legend-person strong,.picker-person strong { font-size: .82rem; }.legend-person small,.picker-person small { color: var(--text-muted); font-size: .7rem; }
+.seat-legend { padding: 16px; }.seat-legend h3 { font-size: .9rem; margin-bottom: 12px; }.legend-person { display: flex; gap: 9px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-light); cursor: grab; }.legend-person:active { cursor: grabbing; }.legend-person:last-child { border: 0; }.legend-avatar,.picker-avatar { width: 30px; height: 30px; display: grid; place-items: center; flex-shrink: 0; color: #fff; border-radius: 50%; font-weight: 600; }.legend-person div,.picker-person>span:last-child { min-width: 0; display: flex; flex-direction: column; }.legend-person strong,.picker-person strong { font-size: .82rem; }.legend-person small,.picker-person small { color: var(--text-muted); font-size: .7rem; }
 .seating-empty { margin: 90px auto; text-align: center; color: var(--text-muted); }.seating-empty h3 { margin: 12px 0 4px; color: var(--text-secondary); }.picker-overlay { position: fixed; inset: 0; z-index: 500; display: grid; place-items: center; padding: 20px; background: rgba(15,23,42,.52); }.seat-picker { width: min(420px,100%); max-height: 80vh; display: flex; flex-direction: column; background: var(--surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }.picker-header { display: flex; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--border); }.picker-header h3 { font-size: 1rem; }.picker-header p { color: var(--text-muted); font-size: .75rem; }.picker-list { overflow-y: auto; padding: 8px; }.picker-person { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px; text-align: left; border-radius: var(--radius-sm); }.picker-person:hover,.picker-person.current { background: var(--primary-light); }.clear-seat { margin: 8px 18px 18px; justify-content: center; }
 @media (max-width: 900px) { .seating-header,.seating-actions { align-items: flex-start; flex-direction: column; }.seating-layout { grid-template-columns: 1fr; }.seat-legend { display: grid; grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); gap: 0 16px; }.seat-legend h3 { grid-column: 1/-1; } }
 </style>

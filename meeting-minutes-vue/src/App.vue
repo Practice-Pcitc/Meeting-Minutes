@@ -18,6 +18,8 @@ import NotificationCenter from './components/NotificationCenter.vue'
 import MeetingArchive from './components/MeetingArchive.vue'
 import SeatingChart from './components/SeatingChart.vue'
 import AppBreadcrumb from './components/AppBreadcrumb.vue'
+import NewMeetingModal from './components/NewMeetingModal.vue'
+import DateTimePicker from './components/DateTimePicker.vue'
 import { useNotify } from './composables/useNotify'
 
 const store = useStore()
@@ -31,6 +33,7 @@ const activeTab = computed(() => route.meta.tab || 'minutes')
 const activeView = computed(() => minuteViews.has(route.query.view) ? route.query.view : 'timeline')
 const showPersonnelModal = ref(false)
 const showLabelModal = ref(false)
+const showNewMeetingModal = ref(false)
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
 let meetingSaveTimer = null
@@ -39,8 +42,10 @@ watch(isAuthenticated, async (loggedIn) => {
   if (loggedIn) {
     await store.loadAll()
     if (route.name === 'login') {
-      const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/minutes'
+      const redirect = store.meetings.value.length && typeof route.query.redirect === 'string' ? route.query.redirect : '/archive'
       await router.replace(redirect)
+    } else if (!store.meetings.value.length && route.name !== 'archive') {
+      await router.replace({ name: 'archive' })
     }
   } else {
     store.clearState()
@@ -98,6 +103,10 @@ const breadcrumbs = computed(() => {
 })
 
 function switchTab(key) {
+  if (key !== 'archive' && !store.meetings.value.length) {
+    notify.error('请先新建一份会议纪要')
+    return
+  }
   router.push(key === 'minutes' ? { name: 'minutes' } : { name: key })
 }
 function switchView(key) {
@@ -115,28 +124,38 @@ async function handleReset() {
   } catch (e) { notify.error(e.message) }
 }
 
-async function createMeeting() {
+async function flushMeetingDraft() {
+  clearTimeout(meetingSaveTimer)
+  const pending = meetingDraft.value
+  meetingDraft.value = null
+  if (pending) await store.updateMeeting(pending)
+}
+
+async function openNewMeetingModal() {
   try {
-    await store.createMeeting('')
+    await flushMeetingDraft()
+    showNewMeetingModal.value = true
+  } catch (e) { notify.error(`当前会议保存失败：${e.message}`) }
+}
+
+async function createMeeting(input) {
+  try {
+    await store.createMeeting(input)
+    showNewMeetingModal.value = false
     await router.push({ name: 'minutes' })
-    notify.success('已创建一份新纪要，原会议已保存到历史记录')
-  } catch (e) { notify.error(e.message) }
+    notify.success('会议纪要已创建')
+    return true
+  } catch (e) {
+    notify.error(e.message)
+    return false
+  }
 }
 
 function setMeeting(patch) {
   store.state.data.meeting = { ...store.meeting.value, ...patch }
   meetingDraft.value = { ...(meetingDraft.value || {}), ...patch }
   clearTimeout(meetingSaveTimer)
-  meetingSaveTimer = setTimeout(async () => {
-    const pending = meetingDraft.value
-    meetingDraft.value = null
-    if (!pending) return
-    try {
-      await store.updateMeeting(pending)
-    } catch (e) {
-      store.state.error = e.message
-    }
-  }, 500)
+  meetingSaveTimer = setTimeout(() => flushMeetingDraft().catch((e) => { store.state.error = e.message }), 500)
 }
 </script>
 
@@ -150,7 +169,7 @@ function setMeeting(patch) {
     <TheSidebar
       @open-personnel="showPersonnelModal = true"
       @open-label="showLabelModal = true"
-      @new-meeting="createMeeting"
+      @new-meeting="openNewMeetingModal"
       @open-settings="switchTab('settings')"
       @open-archive="switchTab('archive')"
       @logout="handleLogout"
@@ -270,16 +289,16 @@ function setMeeting(patch) {
             </div>
             <div class="form-row">
               <label>日期</label>
-              <input type="date" class="input" :value="store.meeting.value.date" @input="setMeeting({ date: $event.target.value })" />
+              <DateTimePicker :model-value="store.meeting.value.date" @update:model-value="setMeeting({ date: $event })" />
             </div>
             <div class="form-row-inline">
               <div class="form-row">
                 <label>开始时间</label>
-                <input type="time" class="input" :value="store.meeting.value.startTime" @input="setMeeting({ startTime: $event.target.value })" />
+                <DateTimePicker mode="time" :model-value="store.meeting.value.startTime" @update:model-value="setMeeting({ startTime: $event })" />
               </div>
               <div class="form-row">
                 <label>结束时间</label>
-                <input type="time" class="input" :value="store.meeting.value.endTime" @input="setMeeting({ endTime: $event.target.value })" />
+                <DateTimePicker mode="time" :model-value="store.meeting.value.endTime" @update:model-value="setMeeting({ endTime: $event })" />
               </div>
             </div>
             <div class="form-row">
@@ -300,6 +319,7 @@ function setMeeting(patch) {
     <!-- 人员管理弹窗 -->
     <PersonnelModal v-if="showPersonnelModal" @close="showPersonnelModal = false" />
     <LabelModal v-if="showLabelModal" @close="showLabelModal = false" />
+    <NewMeetingModal v-if="showNewMeetingModal" :has-persons="Boolean(store.persons.value.length)" :on-create="createMeeting" @close="showNewMeetingModal = false" />
     <NotificationCenter />
   </div>
 </template>

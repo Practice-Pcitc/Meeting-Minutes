@@ -77,6 +77,7 @@ export interface MeetingSummary {
   entryCount: number;
   personCount: number;
   todoCount: number;
+  labels: Label[];
   createdAt: number;
   updatedAt: number;
 }

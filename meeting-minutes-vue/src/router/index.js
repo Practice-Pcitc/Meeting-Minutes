@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  { path: '/', redirect: '/minutes' },
+  { path: '/', redirect: '/archive' },
   { path: '/login', name: 'login', meta: { public: true } },
   { path: '/minutes', name: 'minutes', meta: { tab: 'minutes' } },
   { path: '/summary', name: 'summary', meta: { tab: 'summary' } },
@@ -13,7 +13,7 @@ const routes = [
     path: '/:pathMatch(.*)*',
     redirect: (to) => {
       const legacyView = /^\/minutes\/(timeline|speaker|topic|mindmap)$/.exec(to.path)?.[1]
-      return legacyView === 'timeline' ? '/minutes' : legacyView ? `/minutes?view=${legacyView}` : '/minutes'
+      return legacyView === 'timeline' ? '/minutes' : legacyView ? `/minutes?view=${legacyView}` : '/archive'
     },
   },
 ]

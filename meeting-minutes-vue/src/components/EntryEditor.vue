@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useStore } from '../composables/useStore'
+import DateTimePicker from './DateTimePicker.vue'
+import AppSelect from './AppSelect.vue'
 
 const store = useStore()
 
@@ -20,6 +22,8 @@ const submitting = ref(false)
 const errorMsg = ref('')
 
 const topicNames = computed(() => store.topics.value.map(t => t.name))
+const speakerOptions = computed(() => store.persons.value.map((person) => ({ value: person.id, label: person.name, description: person.role })))
+const topicOptions = computed(() => topicNames.value.map((name) => ({ value: name, label: name })))
 
 let clockTimer = null
 
@@ -92,31 +96,11 @@ function focusEditor() { isExpanded.value = true }
 <template>
   <div class="entry-editor" :class="{ expanded: isExpanded }">
     <div class="editor-row">
-      <div class="speaker-select-wrap">
-        <select v-model="speakerId" class="speaker-select" :disabled="store.persons.value.length === 0">
-          <option value="">{{ store.persons.value.length === 0 ? '请先添加人员' : '选择发言人' }}</option>
-          <option v-for="p in store.persons.value" :key="p.id" :value="p.id">
-            {{ p.name }}{{ p.role ? ' · ' + p.role : '' }}
-          </option>
-        </select>
-      </div>
+      <div class="speaker-select-wrap"><AppSelect v-model="speakerId" :options="speakerOptions" :disabled="!speakerOptions.length" :placeholder="speakerOptions.length ? '选择发言人' : '请先添加人员'" /></div>
 
-      <input
-        v-model="time"
-        type="datetime-local"
-        class="time-input"
-        @input="isTimeManual = true"
-      />
+      <div class="time-input"><DateTimePicker v-model="time" mode="datetime" @update:model-value="isTimeManual = true" /></div>
 
-      <input
-        v-model="topic"
-        class="topic-input"
-        list="editor-topics"
-        placeholder="主题（可后补）"
-      />
-      <datalist id="editor-topics">
-        <option v-for="t in topicNames" :key="t" :value="t"></option>
-      </datalist>
+      <div class="topic-input"><AppSelect v-model="topic" :options="topicOptions" allow-custom placeholder="选择或输入主题" /></div>
 
       <button class="btn-icon" title="使用当前时间" @click="setNow">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -171,34 +155,15 @@ function focusEditor() { isExpanded.value = true }
   margin-bottom: 8px;
 }
 .speaker-select-wrap { flex-shrink: 0; }
-.speaker-select {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: .82rem;
-  background: var(--surface);
-  color: var(--text-secondary);
-  cursor: pointer;
-  max-width: 180px;
-}
-.speaker-select:focus { outline: none; border-color: var(--primary); }
-.speaker-select:disabled { opacity: .5; cursor: not-allowed; }
+.speaker-select-wrap { width: 170px; }
 .time-input {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: .8rem;
-  color: var(--text-secondary);
+  width: 310px;
+  flex-shrink: 0;
 }
 .topic-input {
+  min-width: 180px;
   flex: 1;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: .82rem;
-  min-width: 0;
 }
-.topic-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
 
 .editor-main { display: flex; gap: 8px; align-items: flex-end; }
 .editor-textarea {

@@ -1,7 +1,9 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useStore } from '../composables/useStore'
 import { useNotify } from '../composables/useNotify'
+import DateTimePicker from './DateTimePicker.vue'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps({ entry: Object })
 const emit = defineEmits(['close'])
@@ -49,6 +51,8 @@ async function remove() {
 }
 
 const topicNames = ref([])
+const speakerOptions = computed(() => store.persons.value.map((person) => ({ value: person.id, label: person.name, description: person.role })))
+const topicOptions = computed(() => topicNames.value.map((name) => ({ value: name, label: name })))
 watch(
   () => store.topics.value,
   (v) => { topicNames.value = v.map(t => t.name) },
@@ -68,7 +72,7 @@ watch(
       <div class="modal-body">
         <div class="form-row">
           <label>时间</label>
-          <input type="datetime-local" v-model="form.time" class="input" />
+          <DateTimePicker v-model="form.time" mode="datetime" />
         </div>
         <div class="form-row">
           <label>内容</label>
@@ -76,19 +80,11 @@ watch(
         </div>
         <div class="form-row">
           <label>发言人</label>
-          <select v-model="form.speakerId" class="input">
-            <option value="">未指定</option>
-            <option v-for="p in store.persons.value" :key="p.id" :value="p.id">
-              {{ p.name }}{{ p.role ? ' · ' + p.role : '' }}
-            </option>
-          </select>
+          <AppSelect v-model="form.speakerId" :options="speakerOptions" placeholder="选择发言人" />
         </div>
         <div class="form-row">
           <label>主题</label>
-          <input v-model="form.topic" class="input" list="edit-topics" placeholder="选择或输入主题" />
-          <datalist id="edit-topics">
-            <option v-for="t in topicNames" :key="t" :value="t"></option>
-          </datalist>
+          <AppSelect v-model="form.topic" :options="topicOptions" allow-custom placeholder="选择或输入主题" />
         </div>
       </div>
       <div v-if="errorMsg" class="modal-error">{{ errorMsg }}</div>
