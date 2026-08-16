@@ -446,77 +446,82 @@ onMounted(async () => {
 
 <template>
   <section class="audio-recorder" :class="{ active: recording || paused }" aria-label="会议录音">
-    <div class="recorder-main">
-      <div class="recorder-state">
-        <div class="status-label"><span class="record-dot" :class="{ pulse: recording }"></span>{{ recording ? '录音中' : paused ? '已暂停' : recordings.length ? '可继续录制' : '准备录音' }}</div>
-        <strong class="record-time" aria-live="polite">{{ duration }}</strong>
+    <div class="recorder-control">
+      <div class="recorder-main">
+        <div class="recorder-state">
+          <div class="status-label"><span class="record-dot" :class="{ pulse: recording }"></span>{{ recording ? '录音中' : paused ? '录音已暂停' : recordings.length ? '录音就绪' : '准备录音' }}</div>
+          <strong class="record-time" aria-live="polite">{{ duration }}</strong>
+        </div>
+        <div class="wave-area" :class="{ moving: recording }" aria-hidden="true">
+          <span class="wave-baseline"></span>
+          <i v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}px` }"></i>
+        </div>
+        <div class="recorder-actions">
+          <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" :disabled="meetingEnded" :title="meetingEnded ? '请先重新开启会议' : ''" @click="start"><span class="button-dot"></span>{{ meetingEnded ? '会议已结束' : recordings.length ? '继续录制' : '开始录音' }}</button>
+          <button v-if="recording || paused" class="btn btn-ghost pause-button" @click="togglePause"><SvgIcon :name="paused ? 'play' : 'pause'" :size="15" />{{ paused ? '继续' : '暂停' }}</button>
+          <button v-if="recording || paused" class="btn stop-button" @click="stop"><span class="stop-icon"></span>结束录音</button>
+        </div>
       </div>
-      <div class="wave-area" :class="{ moving: recording }" aria-hidden="true">
-        <i v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}px` }"></i>
-      </div>
-      <div class="recorder-actions">
-        <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" :disabled="meetingEnded" :title="meetingEnded ? '请先重新开启会议' : ''" @click="start"><span class="button-dot"></span>{{ meetingEnded ? '会议已结束' : recordings.length ? '继续录制' : '开始录音' }}</button>
-        <button v-if="recording || paused" class="btn btn-ghost" @click="togglePause"><span class="pause-icon">{{ paused ? '▶' : 'Ⅱ' }}</span>{{ paused ? '继续' : '暂停' }}</button>
-        <button v-if="recording || paused" class="btn stop-button" @click="stop"><span class="stop-icon"></span>结束录音</button>
+      <div class="recorder-meta">
+        <label class="input-source">
+          <span class="meta-icon"><SvgIcon name="microphone" :size="14" /></span>
+          <span class="meta-copy"><small>录音输入</small><strong v-if="recording || paused" :title="activeDeviceLabel">{{ activeDeviceLabel }}</strong></span>
+          <AppSelect v-if="!recording && !paused" v-model="selectedDeviceId" :options="audioInputOptions" :clearable="false" placeholder="选择录音输入源" />
+        </label>
+        <span class="save-status"><b><SvgIcon name="check-circle" :size="12" /></b><span><small>保存状态</small><strong>{{ recording ? '正在实时保存' : recordings.length ? `已保存 ${recordings.length} 段录音` : '开始后自动保存' }}</strong></span></span>
+        <span class="background-status"><SvgIcon name="check-circle" :size="14" />切换页面不会中断</span>
       </div>
     </div>
-    <div class="save-row">
-      <label class="input-source">
-        <SvgIcon name="microphone" :size="13" />
-        <span>输入源</span>
-        <AppSelect v-model="selectedDeviceId" :options="audioInputOptions" :clearable="false" :disabled="recording || paused" placeholder="选择录音输入源" />
-      </label>
-      <span v-if="recording || paused" class="active-source" :title="activeDeviceLabel">当前：{{ activeDeviceLabel }}</span>
-      <span class="save-status"><b>✓</b>{{ recording ? '正在实时保存到服务器' : recordings.length ? `已保存 ${recordings.length} 段录音` : '录音将实时保存到服务器' }}</span>
-    </div>
-    <section v-if="recording || paused || liveTranscript" class="live-transcript" aria-live="polite">
-      <div class="live-transcript-heading">
-        <span><i :class="{ active: recording }"></i>实时转写</span>
-        <small v-if="!localTranscription">请在用户设置中切换到 FunASR</small>
-        <small v-else>{{ liveTranscribing ? '正在识别…' : paused ? '已暂停' : '持续更新' }}</small>
-      </div>
-      <p v-if="liveTranscript">{{ liveTranscript }}</p>
-      <p v-else-if="!localTranscription" class="live-placeholder">云端引擎不会进行滚动转写，避免产生重复费用。</p>
-      <p v-else-if="liveError" class="live-error">{{ liveError }}</p>
-      <p v-else class="live-placeholder">开始说话后，文字会在这里持续出现…</p>
-    </section>
+    <RecordingTimeline
+      :recordings="recordings"
+      :meeting-id="meetingId"
+      :meeting-title="meetingTitle"
+      :live-transcript="liveTranscript"
+      :live-active="recording || paused"
+      :live-transcribing="liveTranscribing"
+      :live-error="liveError"
+      :local-transcription="localTranscription"
+      @changed="loadRecordings"
+    />
   </section>
-  <RecordingTimeline :recordings="recordings" :meeting-id="meetingId" :meeting-title="meetingTitle" @changed="loadRecordings" />
 </template>
 
 <style scoped>
-.audio-recorder { padding: 20px 24px 13px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); flex-shrink: 0; }
-.audio-recorder.active { border-color: #dce6fb; }
-.recorder-main { display: flex; align-items: center; gap: 28px; }
-.recorder-state { min-width: 150px; display: flex; flex-direction: column; gap: 4px; }
-.status-label { display: flex; align-items: center; gap: 8px; font-size: .86rem; font-weight: 650; }
-.record-time { color: #101b32; font-size: 2.05rem; line-height: 1.15; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.audio-recorder { overflow: hidden; background: var(--surface); border: 1px solid #dfe4ec; border-radius: 14px; box-shadow: 0 8px 28px rgba(32,52,89,.055); flex-shrink: 0; }
+.audio-recorder.active { border-color: #cfdaf3; box-shadow: 0 8px 30px rgba(40,100,240,.08); }
+.recorder-control { padding: 18px 24px 14px; }
+.recorder-main { min-height: 66px; display: flex; align-items: center; gap: 24px; }
+.recorder-state { min-width: 145px; display: flex; flex-direction: column; gap: 3px; }
+.status-label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: .78rem; font-weight: 650; }
+.record-time { color: #101b32; font-size: 2rem; line-height: 1.08; font-variant-numeric: tabular-nums; letter-spacing: .025em; }
 .record-dot { width: 10px; height: 10px; border-radius: 50%; background: #aeb9ca; flex: none; }
 .active .record-dot { background: #ef4444; }
 .record-dot.pulse { animation: pulse 1.4s ease-out infinite; }
-.wave-area { height: 48px; flex: 1; min-width: 160px; display: flex; align-items: center; justify-content: center; gap: 3px; overflow: hidden; opacity: .55; }
-.wave-area i { width: 3px; max-height: 40px; flex: 0 0 3px; border-radius: 4px; background: linear-gradient(#7449f4,#2466f1); transition: height 70ms linear; }
+.wave-area { position: relative; height: 48px; flex: 1; min-width: 180px; display: flex; align-items: center; justify-content: center; gap: 3px; overflow: hidden; opacity: .42; }
+.wave-baseline { position: absolute; left: 2%; right: 2%; top: 50%; height: 1px; background: #e6eaf1; }
+.wave-area i { z-index: 1; width: 3px; max-height: 40px; flex: 0 0 3px; border-radius: 4px; background: linear-gradient(#5e7cf4,#2864f0); transition: height 70ms linear; }
 .wave-area.moving { opacity: 1; }
 .recorder-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .recorder-actions .btn { height: 42px; padding: 0 16px; }
 .record-start { min-width: 112px; justify-content: center; }
-.stop-button { color: #e33e3e; background: #fff; border-color: #ff8c8c; }
-.stop-button:hover { background: #fff4f4; }
+.pause-button { min-width: 84px; justify-content: center; }
+.stop-button { color: #df3e3e; background: #fff; border-color: #f5a09a; }
+.stop-button:hover { border-color: #ef6d64; background: #fff7f6; }
 .stop-icon { width: 13px; height: 13px; border: 2px solid currentColor; border-radius: 50%; position: relative; }
 .stop-icon::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: currentColor; }
-.pause-icon { width: 14px; color: #31405b; font-weight: 800; }
 .button-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.save-row { min-height: 38px; display: flex; align-items: center; gap: 26px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-light); color: var(--text-muted); font-size: .75rem; }
-.input-source { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); white-space: nowrap; }
-.input-source :deep(.select-trigger) { width: 190px; height: 30px; }
-.active-source { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
-.save-status { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); }
-.save-status b { width: 16px; height: 16px; display: inline-grid; place-items: center; border: 1px solid #54b888; border-radius: 50%; color: #2aa46c; font-size: .65rem; }
-.live-transcript { margin-top: 12px; padding: 12px 14px; border: 1px solid #e1e9f8; border-radius: 9px; background: #f8faff; }
-.live-transcript-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: #294b91; font-size: .76rem; font-weight: 650; }
-.live-transcript-heading span { display: inline-flex; align-items: center; gap: 7px; }.live-transcript-heading i { width: 7px; height: 7px; border-radius: 50%; background: #aeb9ca; }.live-transcript-heading i.active { background: #ef4444; animation: pulse 1.4s ease-out infinite; }.live-transcript-heading small { color: var(--text-muted); font-size: .67rem; font-weight: 400; }
-.live-transcript p { color: var(--text); font-size: .84rem; line-height: 1.7; white-space: pre-wrap; }.live-transcript .live-placeholder { color: var(--text-muted); }.live-transcript .live-error { color: var(--danger); }
+.recorder-meta { min-height: 42px; display: flex; align-items: center; gap: 28px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border-light); }
+.input-source,.save-status { min-width: 0; display: inline-flex; align-items: center; gap: 9px; color: var(--text-secondary); }
+.input-source { min-width: 280px; }
+.meta-icon,.save-status b { width: 28px; height: 28px; display: grid; place-items: center; flex: none; border-radius: 8px; color: var(--primary); background: var(--primary-light); }
+.save-status b { color: var(--success); background: var(--success-light); }
+.meta-copy,.save-status>span { min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+.meta-copy small,.save-status small { color: var(--text-muted); font-size: .64rem; font-weight: 400; }
+.meta-copy strong,.save-status strong { max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: .72rem; font-weight: 600; }
+.input-source :deep(.app-select) { width: 210px; }
+.input-source :deep(.select-trigger) { height: 30px; }
+.background-status { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: .68rem; white-space: nowrap; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.45); } 70%,100% { box-shadow: 0 0 0 7px rgba(239,68,68,0); } }
-@media (max-width: 980px) { .wave-area { display: none; } }
-@media (max-width: 760px) { .audio-recorder { padding: 16px; } .recorder-main { flex-wrap: wrap; gap: 14px; } .recorder-actions { margin-left: auto; } .save-row { flex-wrap: wrap; gap: 8px 16px; } }
+@media (max-width: 980px) { .wave-area { display: none; }.recorder-state { flex: 1; }.recorder-meta { flex-wrap: wrap; gap: 10px 24px; }.background-status { margin-left: 0; } }
+@media (max-width: 660px) { .recorder-control { padding: 16px; }.recorder-main { flex-wrap: wrap; gap: 14px; }.recorder-state { min-width: 120px; }.record-time { font-size: 1.7rem; }.recorder-actions { margin-left: auto; }.recorder-actions .btn { height: 38px; padding: 0 12px; }.recorder-meta { align-items: flex-start; }.input-source { width: 100%; min-width: 0; }.input-source :deep(.app-select) { min-width: 0; flex: 1; }.background-status { width: 100%; } }
 </style>

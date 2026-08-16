@@ -318,10 +318,10 @@ function setMeeting(patch) {
         >
           <div class="recording-intro">
             <div>
-              <h2>自动录音</h2>
-              <p>开始后可切换到手动记录或其他页面，录音会在后台持续进行。</p>
+              <h2>录音工作台</h2>
+              <p>录音、播放、时间轴与转写集中在一个工作区。</p>
             </div>
-            <span class="background-chip"><SvgIcon name="check-circle" :size="14" /> 独立运行</span>
+            <span class="background-chip" :class="{ active: isCapturing }"><SvgIcon :name="isCapturing ? 'microphone' : 'check-circle'" :size="14" /> {{ recordingStatus === 'recording' ? '后台录音中' : recordingStatus === 'paused' ? '录音已暂停' : '可后台运行' }}</span>
           </div>
           <AudioRecorder
             ref="recorderRef"
@@ -573,7 +573,7 @@ function setMeeting(patch) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 28px;
+  padding: 22px 28px 30px;
   background: var(--bg-secondary);
 }
 .recording-intro {
@@ -582,10 +582,10 @@ function setMeeting(patch) {
   justify-content: space-between;
   gap: 20px;
   max-width: 1080px;
-  margin: 0 auto 18px;
+  margin: 0 auto 14px;
 }
-.recording-intro h2 { color: #14213a; font-size: 1.2rem; }
-.recording-intro p { margin-top: 4px; color: var(--text-muted); font-size: .82rem; }
+.recording-intro h2 { color: #14213a; font-size: 1.16rem; }
+.recording-intro p { margin-top: 2px; color: var(--text-muted); font-size: .78rem; }
 .recording-tab :deep(.audio-recorder) { max-width: 1080px; margin: 0 auto; }
 .background-chip {
   display: inline-flex;
@@ -593,12 +593,13 @@ function setMeeting(patch) {
   gap: 5px;
   padding: 5px 10px;
   border-radius: var(--radius-full);
-  color: var(--success);
-  background: var(--success-light);
+  color: var(--text-secondary);
+  background: #edf0f5;
   font-size: .75rem;
   font-weight: 600;
   white-space: nowrap;
 }
+.background-chip.active { color: #d83b3b; background: #fff0ee; }
 
 .slide-right-enter-active, .slide-right-leave-active { transition: all .25s ease; }
 .slide-right-enter-from, .slide-right-leave-to { opacity: 0; transform: translateX(20px); }
@@ -654,5 +655,11 @@ function setMeeting(patch) {
   margin-top: 12px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
+}
+@media (max-width: 760px) {
+  .recording-tab { padding: 16px; }
+  .recording-intro { align-items: flex-start; }
+  .recording-intro p { max-width: 260px; }
+  .background-chip { padding: 4px 8px; font-size: .68rem; }
 }
 </style>
