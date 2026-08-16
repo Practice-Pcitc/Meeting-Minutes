@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNotify } from '../composables/useNotify'
 import { authFetch, authRequest } from '../composables/useAuth'
 
@@ -7,6 +7,7 @@ const props = defineProps({
   meetingTitle: { type: String, default: '' },
   meetingId: { type: String, required: true },
 })
+const emit = defineEmits(['status-change'])
 const notify = useNotify()
 const status = ref('idle')
 const seconds = ref(0)
@@ -102,6 +103,7 @@ function uploadChunk(chunk) {
 
 const recording = computed(() => status.value === 'recording')
 const paused = computed(() => status.value === 'paused')
+watch(status, value => emit('status-change', { meetingId: props.meetingId, status: value }), { immediate: true })
 const duration = computed(() => {
   const h = Math.floor(seconds.value / 3600)
   const m = Math.floor((seconds.value % 3600) / 60)

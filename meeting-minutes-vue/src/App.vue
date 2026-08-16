@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from './composables/useStore'
 import { useAuth } from './composables/useAuth'
@@ -37,7 +37,42 @@ const showLabelModal = ref(false)
 const showNewMeetingModal = ref(false)
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
+const recordingStatus = ref('idle')
+const currentTime = ref(Date.now())
 let meetingSaveTimer = null
+let statusClockTimer = window.setInterval(() => { currentTime.value = Date.now() }, 30000)
+
+onBeforeUnmount(() => window.clearInterval(statusClockTimer))
+
+watch(() => store.activeMeetingId.value, () => { recordingStatus.value = 'idle' })
+
+function handleRecordingStatusChange(event) {
+  if (!event || event.meetingId !== store.activeMeetingId.value) return
+  const previousStatus = recordingStatus.value
+  recordingStatus.value = event.status
+  const wasCapturing = previousStatus === 'recording' || previousStatus === 'paused'
+  const captureEnded = event.status !== 'recording' && event.status !== 'paused'
+  if (wasCapturing && captureEnded) {
+    store.touchMeetingEnd().catch(error => notify.error(`自动更新会议结束时间失败：${error.message}`))
+  }
+}
+
+const meetingInProgress = computed(() => {
+  const meeting = store.meeting.value
+  if (!meeting.date || (!meeting.startTime && !meeting.endTime)) return false
+  const now = new Date(currentTime.value)
+  const pad = value => String(value).padStart(2, '0')
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  if (meeting.date !== today) return false
+  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  const toMinutes = value => {
+    const [hours, minutes] = value.split(':').map(Number)
+    return hours * 60 + minutes
+  }
+  if (meeting.startTime && currentMinutes < toMinutes(meeting.startTime)) return false
+  if (meeting.endTime && currentMinutes > toMinutes(meeting.endTime)) return false
+  return true
+})
 
 watch(isAuthenticated, async (loggedIn) => {
   if (loggedIn) {
@@ -170,6 +205,7 @@ function setMeeting(patch) {
   <LoginView v-else-if="!isAuthenticated" />
   <div v-else class="app-layout">
     <TheSidebar
+      :recording-status="recordingStatus"
       @open-personnel="showPersonnelModal = true"
       @open-label="showLabelModal = true"
       @new-meeting="openNewMeetingModal"
@@ -184,6 +220,8 @@ function setMeeting(patch) {
         v-if="activeTab !== 'archive'"
         :active-tab="activeTab"
         :tabs="tabs"
+        :recording-status="recordingStatus"
+        :meeting-in-progress="meetingInProgress"
         @switch-tab="switchTab"
         @toggle-summary="toggleSummary"
         @open-personnel="showPersonnelModal = true"
@@ -212,6 +250,7 @@ function setMeeting(patch) {
             :key="store.activeMeetingId.value"
             :meeting-id="store.activeMeetingId.value"
             :meeting-title="store.meeting.value.title"
+            @status-change="handleRecordingStatusChange"
           />
         </div>
 

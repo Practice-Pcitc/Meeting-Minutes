@@ -4,6 +4,9 @@ import { useRoute } from 'vue-router'
 import { useStore } from '../composables/useStore'
 import { useAuth } from '../composables/useAuth'
 
+const props = defineProps({
+  recordingStatus: { type: String, default: 'idle' },
+})
 const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'logout'])
 const store = useStore()
 const route = useRoute()
@@ -15,6 +18,7 @@ const TAG_COLORS = ['#4f6df5', '#2bb673', '#f5a623', '#e8503a', '#8b5cf6', '#0ea
 const activeMeeting = computed(() => store.meetings.value.find(meeting => meeting.id === store.activeMeetingId.value))
 const recentMeetings = computed(() => store.meetings.value.filter(meeting => meeting.id !== store.activeMeetingId.value).slice(0, 4))
 const isArchive = computed(() => route.meta.tab === 'archive')
+const recordingLabel = computed(() => props.recordingStatus === 'recording' ? '正在录音' : props.recordingStatus === 'paused' ? '录音暂停' : '')
 
 function newMeeting() {
   emit('new-meeting')
@@ -50,12 +54,20 @@ function meetingStatus(meeting) {
     </nav>
 
     <div v-if="activeMeeting" class="sidebar-section current-section">
-      <div class="section-label"><span>当前会议</span><span class="live-indicator"><i></i>工作区</span></div>
+      <div class="section-label">
+        <span>当前会议</span>
+        <span class="live-indicator" :class="{ recording: recordingStatus === 'recording', paused: recordingStatus === 'paused' }">
+          <i></i>{{ recordingLabel || '工作区' }}
+        </span>
+      </div>
       <button class="current-meeting" :class="{ active: !isArchive }" @click="emit('open-meeting')">
         <span class="current-icon"><SvgIcon name="file-text" :size="17" /></span>
         <span class="current-info">
           <strong>{{ activeMeeting.title || '未命名会议' }}</strong>
           <small>{{ activeMeeting.date || '未设置日期' }} · {{ activeMeeting.entryCount || 0 }} 条记录</small>
+          <span v-if="recordingLabel" class="current-recording" :class="{ paused: recordingStatus === 'paused' }">
+            <SvgIcon name="microphone" :size="11" />{{ recordingLabel }}
+          </span>
         </span>
         <span class="current-arrow">›</span>
       </button>
@@ -171,13 +183,20 @@ function meetingStatus(meeting) {
 .section-action:hover { opacity: 1; }
 .live-indicator { display: inline-flex; align-items: center; gap: 5px; color: #7394c3; font-size: .65rem; letter-spacing: 0; text-transform: none; }
 .live-indicator i { width: 5px; height: 5px; border-radius: 50%; background: #48cf8b; box-shadow: 0 0 0 3px rgba(72,207,139,.1); }
+.live-indicator.recording { color: #ff8d8d; }
+.live-indicator.recording i { background: #ff6464; animation: sidebar-pulse 1.4s ease-out infinite; }
+.live-indicator.paused { color: #f3c66f; }
+.live-indicator.paused i { background: #eab44f; }
 .current-meeting { width: 100%; min-height: 64px; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgba(106,155,237,.16); border-radius: 10px; color: #dce8fa; text-align: left; background: rgba(255,255,255,.035); transition: var(--transition); }
 .current-meeting:hover,.current-meeting.active { border-color: rgba(94,146,239,.36); background: linear-gradient(110deg,rgba(42,101,220,.2),rgba(255,255,255,.045)); }
 .current-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; border-radius: 8px; color: #79a4ff; background: rgba(44,102,230,.18); }
 .current-info { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .current-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; color: #fff; }
 .current-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: #849abd; font-size: .67rem; }
+.current-recording { display: inline-flex; align-items: center; gap: 3px; width: fit-content; margin-top: 4px; color: #ff9292; font-size: .66rem; font-weight: 650; }
+.current-recording.paused { color: #f3c66f; }
 .current-arrow { color: #7491bd; font-size: 1.2rem; }
+@keyframes sidebar-pulse { 0% { box-shadow: 0 0 0 0 rgba(255,100,100,.45); } 70%,100% { box-shadow: 0 0 0 5px rgba(255,100,100,0); } }
 
 .recent-list { display: flex; flex-direction: column; gap: 4px; }
 .recent-item { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 10px; border-radius: 9px; text-align: left; color: var(--sidebar-text); }

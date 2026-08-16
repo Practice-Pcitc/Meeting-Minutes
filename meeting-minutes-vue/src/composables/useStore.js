@@ -74,6 +74,24 @@ async function updateMeeting(patch) {
   return mutate('PATCH', '/meeting', patch);
 }
 
+function localDateAndTime(date = new Date()) {
+  const pad = value => String(value).padStart(2, '0');
+  return {
+    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    time: `${pad(date.getHours())}:${pad(date.getMinutes())}`,
+  };
+}
+
+async function touchMeetingEnd(date = new Date()) {
+  const currentMeeting = meeting.value;
+  const activity = localDateAndTime(date);
+  // 历史/未来会议的记录编辑不应改写其结束时间；自动更新只作用于当天会议。
+  if (!currentMeeting?.id || currentMeeting.date !== activity.date) return null;
+  // 用户手动设置了更晚的结束时间时予以保留，自动事件只向后推进。
+  if (currentMeeting.endTime && currentMeeting.endTime >= activity.time) return currentMeeting;
+  return updateMeeting({ endTime: activity.time });
+}
+
 async function addPerson({ name, role, color }) {
   return mutate('POST', '/persons', { name, role, color });
 }
@@ -87,15 +105,21 @@ async function removePerson(id) {
 }
 
 async function addEntry(input) {
-  return mutate('POST', '/entries', input);
+  const result = await mutate('POST', '/entries', input);
+  await touchMeetingEnd();
+  return result;
 }
 
 async function updateEntry(id, patch) {
-  return mutate('PATCH', `/entries/${id}`, patch);
+  const result = await mutate('PATCH', `/entries/${id}`, patch);
+  await touchMeetingEnd();
+  return result;
 }
 
 async function removeEntry(id) {
-  return mutate('DELETE', `/entries/${id}`);
+  const result = await mutate('DELETE', `/entries/${id}`);
+  await touchMeetingEnd();
+  return result;
 }
 
 async function addTopic(name) {
@@ -196,6 +220,7 @@ export function useStore() {
     clearState,
     refetch,
     updateMeeting,
+    touchMeetingEnd,
     addPerson,
     updatePerson,
     removePerson,

@@ -3,13 +3,22 @@ import { computed } from 'vue'
 import { useStore } from '../composables/useStore'
 import { useNotify } from '../composables/useNotify'
 
-defineProps({
+const props = defineProps({
   activeTab: String,
-  tabs: Array
+  tabs: Array,
+  recordingStatus: { type: String, default: 'idle' },
+  meetingInProgress: Boolean,
 })
 const emit = defineEmits(['switch-tab', 'toggle-summary', 'open-personnel', 'open-label'])
 const store = useStore()
 const notify = useNotify()
+
+const meetingStatus = computed(() => {
+  if (props.recordingStatus === 'recording') return { label: '正在录音', type: 'recording' }
+  if (props.recordingStatus === 'paused') return { label: '录音已暂停', type: 'paused' }
+  if (props.meetingInProgress) return { label: '会议进行中', type: 'meeting' }
+  return null
+})
 
 const sortedEntries = computed(() =>
   [...store.entries.value].sort((a, b) => a.time.localeCompare(b.time))
@@ -103,7 +112,9 @@ async function handleShare() {
       <div class="heading-copy">
         <div class="title-line">
           <h1>{{ store.meeting.value.title || '未命名会议' }}</h1>
-          <span v-if="activeTab === 'minutes' || activeTab === 'recording'" class="live-chip"><i></i> 会议进行中</span>
+          <span v-if="meetingStatus" class="live-chip" :class="`status-${meetingStatus.type}`">
+            <i></i>{{ meetingStatus.label }}
+          </span>
         </div>
         <div class="meeting-meta">
           <span><SvgIcon name="calendar" :size="13" />{{ store.meeting.value.date || '未设置日期' }}</span>
@@ -128,6 +139,11 @@ async function handleShare() {
       <button v-for="tab in tabs" :key="tab.key" class="header-tab" :class="{ active: activeTab === tab.key }" @click="emit('switch-tab', tab.key)">
         <SvgIcon :name="tab.icon" :size="17" class="tab-icon" />
         {{ tab.label }}
+        <span
+          v-if="tab.key === 'recording' && (recordingStatus === 'recording' || recordingStatus === 'paused')"
+          class="tab-recording-state"
+          :class="{ paused: recordingStatus === 'paused' }"
+        >{{ recordingStatus === 'paused' ? '已暂停' : '录音中' }}</span>
       </button>
     </nav>
   </header>
@@ -147,8 +163,12 @@ async function handleShare() {
 .heading-copy { min-width: 0; }
 .title-line { display: flex; align-items: center; gap: 10px; }
 .title-line h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.25rem; line-height: 1.4; font-weight: 750; color: #14213a; }
-.live-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; color: #e34444; background: #fff0f0; border-radius: 999px; font-size: .7rem; font-weight: 650; white-space: nowrap; }
-.live-chip i { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+.live-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; font-size: .7rem; font-weight: 650; white-space: nowrap; }
+.live-chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live-chip.status-recording { color: #dc3535; background: #fff0f0; }
+.live-chip.status-recording i { animation: status-pulse 1.4s ease-out infinite; }
+.live-chip.status-paused { color: #b7791f; background: #fff8e6; }
+.live-chip.status-meeting { color: #237a57; background: #eaf8f1; }
 .meeting-meta { display: flex; align-items: center; gap: 16px; margin-top: 5px; color: var(--text-secondary); font-size: .76rem; }
 .meeting-meta > span { display: inline-flex; align-items: center; gap: 5px; }
 .mini-attendees { margin-left: 3px; }
@@ -183,6 +203,22 @@ async function handleShare() {
 }
 .header-tab.active:hover { background: transparent; }
 .tab-icon { color: currentColor; }
+.tab-recording-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 2px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #dc3535;
+  background: #fff0f0;
+  font-size: .65rem;
+  font-weight: 650;
+}
+.tab-recording-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.tab-recording-state:not(.paused)::before { animation: status-pulse 1.4s ease-out infinite; }
+.tab-recording-state.paused { color: #b7791f; background: #fff8e6; }
+@keyframes status-pulse { 0% { box-shadow: 0 0 0 0 currentColor; } 70%,100% { box-shadow: 0 0 0 5px transparent; } }
 
 .header-actions {
   display: flex;
