@@ -4,6 +4,7 @@ import { useStore } from '../composables/useStore'
 import DateTimePicker from './DateTimePicker.vue'
 import AppSelect from './AppSelect.vue'
 
+const props = defineProps({ disabled: Boolean })
 const store = useStore()
 
 function nowDateTimeLocal() {
@@ -59,7 +60,7 @@ onBeforeUnmount(() => {
 
 async function handleSubmit() {
   const text = content.value.trim()
-  if (!text || submitting.value) return
+  if (!text || submitting.value || props.disabled) return
   submitting.value = true
   errorMsg.value = ''
   try {
@@ -110,9 +111,11 @@ function focusEditor() { isExpanded.value = true }
     <div class="editor-main">
       <textarea
         v-model="content"
+        :disabled="disabled"
         class="editor-textarea"
         :placeholder="store.persons.value.length === 0
           ? '请先在左侧添加参会人员，然后开始记录内容...'
+          : disabled ? '会议已结束，请重新开启后继续记录...'
           : (isExpanded ? '输入会议内容... (Ctrl+Enter 提交)' : '记录会议内容...')"
         rows="1"
         @focus="focusEditor"
@@ -120,7 +123,7 @@ function focusEditor() { isExpanded.value = true }
       ></textarea>
       <button
         class="btn btn-primary submit-btn"
-        :disabled="!content.trim() || submitting"
+        :disabled="disabled || !content.trim() || submitting"
         @click="handleSubmit"
       >
         ＋ 添加

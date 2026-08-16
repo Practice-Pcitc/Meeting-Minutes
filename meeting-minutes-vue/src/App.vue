@@ -38,6 +38,7 @@ const showNewMeetingModal = ref(false)
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
 const recordingStatus = ref('idle')
+const recorderRef = ref(null)
 const currentTime = ref(Date.now())
 let meetingSaveTimer = null
 let statusClockTimer = window.setInterval(() => { currentTime.value = Date.now() }, 30000)
@@ -59,6 +60,7 @@ function handleRecordingStatusChange(event) {
 
 const meetingInProgress = computed(() => {
   const meeting = store.meeting.value
+  if (meeting.status === 'ended') return false
   if (!meeting.date || (!meeting.startTime && !meeting.endTime)) return false
   const now = new Date(currentTime.value)
   const pad = value => String(value).padStart(2, '0')
@@ -73,6 +75,66 @@ const meetingInProgress = computed(() => {
   if (meeting.endTime && currentMinutes > toMinutes(meeting.endTime)) return false
   return true
 })
+const meetingEnded = computed(() => store.meeting.value.status === 'ended')
+
+const isCapturing = computed(() => recordingStatus.value === 'recording' || recordingStatus.value === 'paused')
+
+async function confirmAndStopRecording({ title, message, confirmText }) {
+  if (!isCapturing.value) return true
+  const confirmed = await notify.confirm({ title, message, confirmText, danger: true })
+  if (!confirmed) return false
+  await recorderRef.value?.stop()
+  return true
+}
+
+async function selectMeetingWithGuard(id) {
+  if (!id || id === store.activeMeetingId.value) {
+    await switchTab('minutes')
+    return
+  }
+  const target = store.meetings.value.find(meeting => meeting.id === id)
+  const allowed = await confirmAndStopRecording({
+    title: '切换会议',
+    message: `当前会议正在录音。切换到「${target?.title || '未命名会议'}」前将先结束并保存当前录音，是否继续？`,
+    confirmText: '结束录音并切换',
+  })
+  if (!allowed) return
+  try {
+    await store.selectMeeting(id)
+    await switchTab('minutes')
+    notify.success('已切换会议纪要')
+  } catch (error) { notify.error(error.message) }
+}
+
+async function toggleMeetingStatus() {
+  if (meetingEnded.value) {
+    try {
+      await store.updateMeeting({ status: 'active', endTime: '' })
+      notify.success('会议已重新开启')
+    } catch (error) { notify.error(error.message) }
+    return
+  }
+  const hadRecording = isCapturing.value
+  const allowed = await confirmAndStopRecording({
+    title: '结束会议',
+    message: '结束会议后将停止当前录音，并暂停新增记录。之后仍可重新开启会议。',
+    confirmText: '结束会议',
+  })
+  if (!allowed) return
+  if (!hadRecording) {
+    const confirmed = await notify.confirm({
+      title: '结束会议',
+      message: '结束后将暂停新增记录，之后仍可重新开启会议。',
+      confirmText: '结束会议',
+    })
+    if (!confirmed) return
+  }
+  try {
+    await store.touchMeetingEnd()
+    await store.updateMeeting({ status: 'ended' })
+    notify.success('会议已结束')
+  } catch (error) { notify.error(error.message) }
+}
 
 watch(isAuthenticated, async (loggedIn) => {
   if (loggedIn) {
@@ -171,6 +233,12 @@ async function flushMeetingDraft() {
 
 async function openNewMeetingModal() {
   try {
+    const allowed = await confirmAndStopRecording({
+      title: '新建会议',
+      message: '当前会议正在录音。新建会议前将先结束并保存当前录音，是否继续？',
+      confirmText: '结束录音并继续',
+    })
+    if (!allowed) return
     await flushMeetingDraft()
     showNewMeetingModal.value = true
   } catch (e) { notify.error(`当前会议保存失败：${e.message}`) }
@@ -206,12 +274,14 @@ function setMeeting(patch) {
   <div v-else class="app-layout">
     <TheSidebar
       :recording-status="recordingStatus"
+      :meeting-ended="meetingEnded"
       @open-personnel="showPersonnelModal = true"
       @open-label="showLabelModal = true"
       @new-meeting="openNewMeetingModal"
       @open-settings="switchTab('settings')"
       @open-archive="switchTab('archive')"
       @open-meeting="switchTab('minutes')"
+      @select-meeting="selectMeetingWithGuard"
       @logout="handleLogout"
     />
     <div class="app-main">
@@ -222,10 +292,12 @@ function setMeeting(patch) {
         :tabs="tabs"
         :recording-status="recordingStatus"
         :meeting-in-progress="meetingInProgress"
+        :meeting-ended="meetingEnded"
         @switch-tab="switchTab"
         @toggle-summary="toggleSummary"
         @open-personnel="showPersonnelModal = true"
         @open-label="showLabelModal = true"
+        @toggle-meeting-status="toggleMeetingStatus"
       />
       <div v-if="store.state.error" class="connection-error">
         {{ store.state.error }}
@@ -247,9 +319,11 @@ function setMeeting(patch) {
             <span class="background-chip"><SvgIcon name="check-circle" :size="14" /> 独立运行</span>
           </div>
           <AudioRecorder
+            ref="recorderRef"
             :key="store.activeMeetingId.value"
             :meeting-id="store.activeMeetingId.value"
             :meeting-title="store.meeting.value.title"
+            :meeting-ended="meetingEnded"
             @status-change="handleRecordingStatusChange"
           />
         </div>
@@ -281,7 +355,7 @@ function setMeeting(patch) {
               </div>
 
               <!-- 底部录入 -->
-              <EntryEditor />
+              <EntryEditor :disabled="meetingEnded" />
             </div>
 
             <!-- 右侧摘要面板 -->
@@ -294,7 +368,7 @@ function setMeeting(patch) {
         <!-- 待办事项 Tab -->
         <TodoView v-else-if="activeTab === 'todos'" />
 
-        <ArchiveView v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" />
+        <ArchiveView v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" @select-meeting="selectMeetingWithGuard" />
 
         <SeatingView v-else-if="activeTab === 'seating'" />
 

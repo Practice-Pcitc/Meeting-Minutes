@@ -2,10 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNotify } from '../composables/useNotify'
 import { authFetch, authRequest } from '../composables/useAuth'
+import AppSelect from './AppSelect.vue'
 
 const props = defineProps({
   meetingTitle: { type: String, default: '' },
   meetingId: { type: String, required: true },
+  meetingEnded: Boolean,
 })
 const emit = defineEmits(['status-change'])
 const notify = useNotify()
@@ -14,15 +16,50 @@ const seconds = ref(0)
 const audioUrl = ref('')
 const audioBlob = ref(null)
 const mimeType = ref('')
+const audioInputs = ref([])
+const selectedDeviceId = ref(localStorage.getItem('meeting-minutes-audio-input') || '')
+const activeDeviceLabel = ref('')
+const waveformBars = ref(Array(52).fill(4))
+const audioInputOptions = computed(() => [
+  { value: '', label: '系统默认麦克风' },
+  ...audioInputs.value.map(device => ({ value: device.id, label: device.label })),
+])
 let recorder = null
 let stream = null
 let timer = null
+let audioContext = null
+let analyser = null
+let analyserSource = null
+let animationFrame = null
+let stopPromise = null
+let resolveStop = null
 let chunks = []
 let saveQueue = Promise.resolve()
 let serverRecordingId = ''
 
 const DB_NAME = 'meeting-minutes-audio'
 const STORE_NAME = 'recordings'
+
+watch(selectedDeviceId, value => {
+  if (value) localStorage.setItem('meeting-minutes-audio-input', value)
+  else localStorage.removeItem('meeting-minutes-audio-input')
+})
+
+async function refreshAudioInputs() {
+  if (!navigator.mediaDevices?.enumerateDevices) return
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    audioInputs.value = devices
+      .filter(device => device.kind === 'audioinput')
+      .map((device, index) => ({
+        id: device.deviceId,
+        label: device.label || `麦克风 ${index + 1}`,
+      }))
+    if (selectedDeviceId.value && !audioInputs.value.some(device => device.id === selectedDeviceId.value)) {
+      selectedDeviceId.value = ''
+    }
+  } catch { /* 设备枚举失败时仍可使用系统默认麦克风 */ }
+}
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -112,8 +149,50 @@ const duration = computed(() => {
 })
 
 function releaseStream() {
+  stopAnalyser()
   stream?.getTracks().forEach(track => track.stop())
   stream = null
+  activeDeviceLabel.value = ''
+}
+function stopAnalyser() {
+  if (animationFrame) cancelAnimationFrame(animationFrame)
+  animationFrame = null
+  analyserSource?.disconnect()
+  analyserSource = null
+  analyser = null
+  if (audioContext && audioContext.state !== 'closed') audioContext.close().catch(() => {})
+  audioContext = null
+  waveformBars.value = Array(52).fill(4)
+}
+function startAnalyser(mediaStream) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext
+  if (!AudioContextClass) return
+  try {
+    audioContext = new AudioContextClass()
+    audioContext.resume().catch(() => {})
+    analyser = audioContext.createAnalyser()
+    analyser.fftSize = 256
+    analyser.smoothingTimeConstant = .72
+    analyserSource = audioContext.createMediaStreamSource(mediaStream)
+    analyserSource.connect(analyser)
+    const frequencyData = new Uint8Array(analyser.frequencyBinCount)
+    const render = () => {
+      if (!analyser) return
+      analyser.getByteFrequencyData(frequencyData)
+      const usefulBins = Math.floor(frequencyData.length * .72)
+      waveformBars.value = waveformBars.value.map((_, index) => {
+        const start = Math.floor(index * usefulBins / waveformBars.value.length)
+        const end = Math.max(start + 1, Math.floor((index + 1) * usefulBins / waveformBars.value.length))
+        let peak = 0
+        for (let bin = start; bin < end; bin += 1) peak = Math.max(peak, frequencyData[bin])
+        return Math.max(4, Math.round((peak / 255) * 40))
+      })
+      animationFrame = requestAnimationFrame(render)
+    }
+    render()
+  } catch {
+    stopAnalyser()
+  }
 }
 function stopClock() { clearInterval(timer); timer = null }
 function startClock() {
@@ -146,7 +225,18 @@ async function start() {
   }
   try {
     await reset()
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...(selectedDeviceId.value ? { deviceId: { exact: selectedDeviceId.value } } : {}),
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    })
+    const audioTrack = stream.getAudioTracks()[0]
+    activeDeviceLabel.value = audioTrack?.label || '当前麦克风'
+    await refreshAudioInputs()
+    startAnalyser(stream)
     const type = supportedType()
     recorder = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream)
     const serverInfo = await authRequest('POST', `/meetings/${props.meetingId}/recordings/start`, { mimeType: recorder.mimeType || type })
@@ -163,6 +253,9 @@ async function start() {
       audioBlob.value = new Blob(chunks, { type: mimeType.value })
       audioUrl.value = URL.createObjectURL(audioBlob.value)
       status.value = 'stopped'
+      resolveStop?.()
+      resolveStop = null
+      stopPromise = null
       releaseStream()
       persist(false)
       try {
@@ -173,6 +266,9 @@ async function start() {
     }
     recorder.onerror = () => {
       stopClock(); releaseStream(); status.value = 'idle'
+      resolveStop?.()
+      resolveStop = null
+      stopPromise = null
       notify.error('录音过程中发生错误，请重新开始')
     }
     recorder.start(1000)
@@ -182,19 +278,30 @@ async function start() {
     releaseStream()
     if (['NotAllowedError', 'SecurityError'].includes(error?.name)) notify.error('无法使用麦克风，请允许浏览器访问麦克风')
     else if (error?.name === 'NotFoundError') notify.error('没有检测到可用的麦克风')
+    else if (error?.name === 'OverconstrainedError') { selectedDeviceId.value = ''; notify.error('所选麦克风当前不可用，请重新选择') }
     else notify.error(`录音启动失败：${error?.message || '未知错误'}`)
   }
 }
 function togglePause() {
   if (!recorder) return
-  if (recording.value) { recorder.pause(); status.value = 'paused'; stopClock() }
-  else if (paused.value) { recorder.resume(); status.value = 'recording'; startClock() }
+  if (recording.value) {
+    recorder.pause(); status.value = 'paused'; stopClock()
+    audioContext?.suspend().catch(() => {})
+    waveformBars.value = Array(52).fill(4)
+  } else if (paused.value) {
+    recorder.resume(); status.value = 'recording'; startClock()
+    audioContext?.resume().catch(() => {})
+  }
 }
 function stop() {
-  if (!recorder || recorder.state === 'inactive') return
+  if (!recorder || recorder.state === 'inactive') return Promise.resolve()
+  if (stopPromise) return stopPromise
+  stopPromise = new Promise(resolve => { resolveStop = resolve })
   stopClock()
   recorder.stop()
+  return stopPromise
 }
+defineExpose({ stop })
 function download() {
   const extension = mimeType.value.includes('mp4') ? 'm4a' : mimeType.value.includes('ogg') ? 'ogg' : 'webm'
   const title = (props.meetingTitle || '会议录音').replace(/[\\/:*?"<>|]/g, '_')
@@ -210,9 +317,15 @@ onBeforeUnmount(() => {
   if (recorder?.state !== 'inactive') recorder?.stop()
   releaseStream()
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
+  navigator.mediaDevices?.removeEventListener?.('devicechange', refreshAudioInputs)
 })
 
-onMounted(async () => { await restoreLocal(); await restoreServerRecording() })
+onMounted(async () => {
+  await refreshAudioInputs()
+  navigator.mediaDevices?.addEventListener?.('devicechange', refreshAudioInputs)
+  await restoreLocal()
+  await restoreServerRecording()
+})
 </script>
 
 <template>
@@ -223,16 +336,22 @@ onMounted(async () => { await restoreLocal(); await restoreServerRecording() })
         <strong class="record-time" aria-live="polite">{{ duration }}</strong>
       </div>
       <div class="wave-area" :class="{ moving: recording }" aria-hidden="true">
-        <i v-for="n in 52" :key="n" :style="{ height: `${8 + ((n * 17) % 30)}px`, animationDelay: `${(n % 9) * -0.08}s` }"></i>
+        <i v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}px` }"></i>
       </div>
       <div class="recorder-actions">
-        <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" @click="start"><span class="button-dot"></span>{{ audioUrl ? '重新录音' : '开始录音' }}</button>
+        <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" :disabled="meetingEnded" :title="meetingEnded ? '请先重新开启会议' : ''" @click="start"><span class="button-dot"></span>{{ meetingEnded ? '会议已结束' : audioUrl ? '重新录音' : '开始录音' }}</button>
         <button v-if="recording || paused" class="btn btn-ghost" @click="togglePause"><span class="pause-icon">{{ paused ? '▶' : 'Ⅱ' }}</span>{{ paused ? '继续' : '暂停' }}</button>
         <button v-if="recording || paused" class="btn stop-button" @click="stop"><span class="stop-icon"></span>结束录音</button>
       </div>
     </div>
     <div class="save-row">
-      <span>输入源：默认麦克风</span><span class="save-status"><b>✓</b>{{ recording ? '正在实时保存到服务器' : audioUrl ? '已保存到服务器' : '录音将实时保存到服务器' }}</span>
+      <label class="input-source">
+        <SvgIcon name="microphone" :size="13" />
+        <span>输入源</span>
+        <AppSelect v-model="selectedDeviceId" :options="audioInputOptions" :clearable="false" :disabled="recording || paused" placeholder="选择录音输入源" />
+      </label>
+      <span v-if="recording || paused" class="active-source" :title="activeDeviceLabel">当前：{{ activeDeviceLabel }}</span>
+      <span class="save-status"><b>✓</b>{{ recording ? '正在实时保存到服务器' : audioUrl ? '已保存到服务器' : '录音将实时保存到服务器' }}</span>
       <div v-if="audioUrl" class="playback"><audio :src="audioUrl" controls preload="metadata" /><button class="btn btn-ghost btn-sm" @click="download">下载录音</button><button class="btn-icon delete-recording" title="删除服务器录音" @click="reset">×</button></div>
     </div>
   </section>
@@ -249,9 +368,8 @@ onMounted(async () => { await restoreLocal(); await restoreServerRecording() })
 .active .record-dot { background: #ef4444; }
 .record-dot.pulse { animation: pulse 1.4s ease-out infinite; }
 .wave-area { height: 48px; flex: 1; min-width: 160px; display: flex; align-items: center; justify-content: center; gap: 3px; overflow: hidden; opacity: .55; }
-.wave-area i { width: 3px; max-height: 40px; flex: 0 0 3px; border-radius: 4px; background: linear-gradient(#7449f4,#2466f1); transform: scaleY(.62); }
+.wave-area i { width: 3px; max-height: 40px; flex: 0 0 3px; border-radius: 4px; background: linear-gradient(#7449f4,#2466f1); transition: height 70ms linear; }
 .wave-area.moving { opacity: 1; }
-.wave-area.moving i { animation: wave .75s ease-in-out infinite alternate; }
 .recorder-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .recorder-actions .btn { height: 42px; padding: 0 16px; }
 .record-start { min-width: 112px; justify-content: center; }
@@ -262,13 +380,15 @@ onMounted(async () => { await restoreLocal(); await restoreServerRecording() })
 .pause-icon { width: 14px; color: #31405b; font-weight: 800; }
 .button-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .save-row { min-height: 38px; display: flex; align-items: center; gap: 26px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-light); color: var(--text-muted); font-size: .75rem; }
+.input-source { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); white-space: nowrap; }
+.input-source :deep(.select-trigger) { width: 190px; height: 30px; }
+.active-source { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .save-status { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); }
 .save-status b { width: 16px; height: 16px; display: inline-grid; place-items: center; border: 1px solid #54b888; border-radius: 50%; color: #2aa46c; font-size: .65rem; }
 .playback { margin-left: auto; display: flex; align-items: center; gap: 7px; }
 .playback audio { width: 230px; height: 30px; }
 .delete-recording { width: 30px; height: 30px; color: var(--text-muted); font-size: 20px; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.45); } 70%,100% { box-shadow: 0 0 0 7px rgba(239,68,68,0); } }
-@keyframes wave { from { transform: scaleY(.35); } to { transform: scaleY(1); } }
 @media (max-width: 980px) { .wave-area { display: none; } .playback audio { width: 180px; } }
 @media (max-width: 760px) { .audio-recorder { padding: 16px; } .recorder-main { flex-wrap: wrap; gap: 14px; } .recorder-actions { margin-left: auto; } .save-row { flex-wrap: wrap; gap: 8px 16px; } .playback { flex-basis: 100%; margin-left: 0; } }
 </style>

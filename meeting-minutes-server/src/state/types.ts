@@ -9,6 +9,7 @@ export interface Meeting {
   startTime: string; // HH:mm
   endTime: string; // HH:mm
   location: string;
+  status: 'active' | 'ended';
 }
 
 export interface Person {
@@ -74,6 +75,7 @@ export interface MeetingSummary {
   title: string;
   date: string;
   location: string;
+  status: 'active' | 'ended';
   entryCount: number;
   personCount: number;
   todoCount: number;
@@ -100,6 +102,7 @@ export const emptyState = (id = 'default'): AppState => ({
     startTime: '',
     endTime: '',
     location: '',
+    status: 'active',
   },
   persons: [],
   entries: [],

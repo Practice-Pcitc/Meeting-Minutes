@@ -204,6 +204,7 @@ export class StateService implements OnModuleInit {
         title: item.meeting.title,
         date: item.meeting.date,
         location: item.meeting.location,
+        status: item.meeting.status,
         entryCount: item.entries.length,
         personCount: item.persons.length,
         todoCount: item.todos.length,
@@ -265,7 +266,12 @@ export class StateService implements OnModuleInit {
     if (!document) return null;
     const allowed: (keyof Omit<Meeting, 'id'>)[] = ['title', 'date', 'startTime', 'endTime', 'location'];
     for (const key of allowed) {
-      if (typeof updates[key] === 'string') document.meeting[key] = updates[key]!.trim();
+      const value = updates[key];
+      if (typeof value === 'string') (document.meeting as unknown as Record<string, string>)[key] = value.trim();
+    }
+    if (updates.status !== undefined) {
+      if (!['active', 'ended'].includes(updates.status)) throw new BadRequestException('会议状态无效');
+      document.meeting.status = updates.status;
     }
     document.updatedAt = Date.now();
     this.persist();

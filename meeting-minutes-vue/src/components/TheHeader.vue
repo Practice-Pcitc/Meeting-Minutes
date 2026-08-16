@@ -8,14 +8,16 @@ const props = defineProps({
   tabs: Array,
   recordingStatus: { type: String, default: 'idle' },
   meetingInProgress: Boolean,
+  meetingEnded: Boolean,
 })
-const emit = defineEmits(['switch-tab', 'toggle-summary', 'open-personnel', 'open-label'])
+const emit = defineEmits(['switch-tab', 'toggle-summary', 'open-personnel', 'open-label', 'toggle-meeting-status'])
 const store = useStore()
 const notify = useNotify()
 
 const meetingStatus = computed(() => {
   if (props.recordingStatus === 'recording') return { label: '正在录音', type: 'recording' }
   if (props.recordingStatus === 'paused') return { label: '录音已暂停', type: 'paused' }
+  if (props.meetingEnded) return { label: '会议已结束', type: 'ended' }
   if (props.meetingInProgress) return { label: '会议进行中', type: 'meeting' }
   return null
 })
@@ -127,6 +129,9 @@ async function handleShare() {
         </div>
       </div>
       <div class="header-actions">
+        <button class="btn" :class="meetingEnded ? 'reopen-button' : 'end-button'" @click="emit('toggle-meeting-status')">
+          <SvgIcon :name="meetingEnded ? 'refresh-cw' : 'square'" :size="14" />{{ meetingEnded ? '重新开启会议' : '结束会议' }}
+        </button>
         <button class="btn btn-ghost" @click="emit('open-label')"><SvgIcon name="tag" :size="15" /> 标签</button>
         <button class="btn btn-ghost" @click="emit('open-personnel')"><SvgIcon name="users" :size="15" /> 参会人员</button>
         <button class="btn btn-ghost" @click="handleExport" :disabled="!store.entries.value.length" title="导出为 Markdown">
@@ -169,6 +174,7 @@ async function handleShare() {
 .live-chip.status-recording i { animation: status-pulse 1.4s ease-out infinite; }
 .live-chip.status-paused { color: #b7791f; background: #fff8e6; }
 .live-chip.status-meeting { color: #237a57; background: #eaf8f1; }
+.live-chip.status-ended { color: #667085; background: #eef1f5; }
 .meeting-meta { display: flex; align-items: center; gap: 16px; margin-top: 5px; color: var(--text-secondary); font-size: .76rem; }
 .meeting-meta > span { display: inline-flex; align-items: center; gap: 5px; }
 .mini-attendees { margin-left: 3px; }
@@ -226,6 +232,10 @@ async function handleShare() {
   gap: 6px;
 }
 .header-actions .btn { height: 36px; }
+.end-button { color: #d64545; border-color: #f0b5b5; background: #fff; }
+.end-button:hover { color: #c93232; border-color: #e58f8f; background: #fff5f5; }
+.reopen-button { color: #237a57; border-color: #9bd5bd; background: #f2fbf7; }
+.reopen-button:hover { color: #176a48; border-color: #76c5a3; background: #e8f8f0; }
 .panel-toggle { width: 36px; height: 36px; border: 1px solid var(--border); }
 @media (max-width: 900px) { .meeting-meta span:nth-child(3),.mini-attendees { display: none; } .header-actions .btn:nth-child(-n+2) { display: none; } }
 </style>

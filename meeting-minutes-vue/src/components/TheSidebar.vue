@@ -6,8 +6,9 @@ import { useAuth } from '../composables/useAuth'
 
 const props = defineProps({
   recordingStatus: { type: String, default: 'idle' },
+  meetingEnded: Boolean,
 })
-const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'logout'])
+const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'select-meeting', 'logout'])
 const store = useStore()
 const route = useRoute()
 const { auth } = useAuth()
@@ -19,15 +20,13 @@ const activeMeeting = computed(() => store.meetings.value.find(meeting => meetin
 const recentMeetings = computed(() => store.meetings.value.filter(meeting => meeting.id !== store.activeMeetingId.value).slice(0, 4))
 const isArchive = computed(() => route.meta.tab === 'archive')
 const recordingLabel = computed(() => props.recordingStatus === 'recording' ? '正在录音' : props.recordingStatus === 'paused' ? '录音暂停' : '')
+const workspaceLabel = computed(() => recordingLabel.value || (props.meetingEnded ? '会议已结束' : '工作区'))
 
 function newMeeting() {
   emit('new-meeting')
 }
 
-async function openMeeting(id) {
-  await store.selectMeeting(id)
-  emit('open-meeting')
-}
+function openMeeting(id) { emit('select-meeting', id) }
 
 function meetingStatus(meeting) {
   return meeting.id === store.activeMeetingId.value ? '当前会议' : (meeting.date || '未设置日期')
@@ -56,8 +55,8 @@ function meetingStatus(meeting) {
     <div v-if="activeMeeting" class="sidebar-section current-section">
       <div class="section-label">
         <span>当前会议</span>
-        <span class="live-indicator" :class="{ recording: recordingStatus === 'recording', paused: recordingStatus === 'paused' }">
-          <i></i>{{ recordingLabel || '工作区' }}
+        <span class="live-indicator" :class="{ recording: recordingStatus === 'recording', paused: recordingStatus === 'paused', ended: meetingEnded && !recordingLabel }">
+          <i></i>{{ workspaceLabel }}
         </span>
       </div>
       <button class="current-meeting" :class="{ active: !isArchive }" @click="emit('open-meeting')">
@@ -187,6 +186,8 @@ function meetingStatus(meeting) {
 .live-indicator.recording i { background: #ff6464; animation: sidebar-pulse 1.4s ease-out infinite; }
 .live-indicator.paused { color: #f3c66f; }
 .live-indicator.paused i { background: #eab44f; }
+.live-indicator.ended { color: #91a0b6; }
+.live-indicator.ended i { background: #78879d; box-shadow: none; }
 .current-meeting { width: 100%; min-height: 64px; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgba(106,155,237,.16); border-radius: 10px; color: #dce8fa; text-align: left; background: rgba(255,255,255,.035); transition: var(--transition); }
 .current-meeting:hover,.current-meeting.active { border-color: rgba(94,146,239,.36); background: linear-gradient(110deg,rgba(42,101,220,.2),rgba(255,255,255,.045)); }
 .current-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; border-radius: 8px; color: #79a4ff; background: rgba(44,102,230,.18); }

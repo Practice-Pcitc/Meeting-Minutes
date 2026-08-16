@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { useStore } from '../composables/useStore'
 import { useNotify } from '../composables/useNotify'
+import AppSelect from '../components/AppSelect.vue'
 
 const store = useStore()
 const notify = useNotify()
@@ -10,6 +11,7 @@ const newAssignee = ref('')
 
 const pendingTodos = computed(() => store.todos.value.filter(t => !t.done))
 const doneTodos = computed(() => store.todos.value.filter(t => t.done))
+const assigneeOptions = computed(() => store.persons.value.map(person => ({ value: person.id, label: person.name, description: person.role })))
 
 async function addTodo() {
   const text = newTodo.value.trim()
@@ -56,10 +58,7 @@ function assigneeName(id) {
           :placeholder="store.persons.value.length === 0 ? '输入待办事项...' : '输入待办事项后回车...'"
           @keydown.enter="addTodo"
         />
-        <select v-model="newAssignee" class="assignee-select" :disabled="store.persons.value.length === 0">
-          <option value="">{{ store.persons.value.length === 0 ? '暂无人员' : '指派给（可选）' }}</option>
-          <option v-for="p in store.persons.value" :key="p.id" :value="p.id">{{ p.name }}</option>
-        </select>
+        <div class="assignee-select"><AppSelect v-model="newAssignee" :options="assigneeOptions" :disabled="store.persons.value.length === 0" :placeholder="store.persons.value.length === 0 ? '暂无人员' : '指派给（可选）'" /></div>
         <button class="btn btn-primary" @click="addTodo" :disabled="!newTodo.trim()">＋ 添加</button>
       </div>
 
@@ -119,15 +118,9 @@ function assigneeName(id) {
 .add-todo-row { display: flex; gap: 8px; margin-bottom: 24px; }
 .add-todo-row .input { flex: 1; }
 .assignee-select {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 7px 10px;
-  font-size: .82rem;
-  background: var(--surface);
-  color: var(--text-secondary);
-  cursor: pointer;
+  width: 190px;
+  flex-shrink: 0;
 }
-.assignee-select:disabled { opacity: .5; cursor: not-allowed; }
 .todo-section { margin-bottom: 20px; }
 .section-label {
   font-size: .8rem;

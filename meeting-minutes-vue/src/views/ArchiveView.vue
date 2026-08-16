@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useStore } from '../composables/useStore'
 import { useNotify } from '../composables/useNotify'
 
-const emit = defineEmits(['open-meeting'])
+const emit = defineEmits(['open-meeting', 'select-meeting'])
 const store = useStore()
 const notify = useNotify()
 const query = ref('')
@@ -29,11 +29,7 @@ const filtered = computed(() => {
 
 async function openMeeting(id) {
   if (id === store.activeMeetingId.value) return emit('open-meeting')
-  try {
-    await store.selectMeeting(id)
-    emit('open-meeting')
-    notify.success('已切换会议纪要')
-  } catch (e) { notify.error(e.message) }
+  emit('select-meeting', id)
 }
 
 async function removeMeeting(item) {

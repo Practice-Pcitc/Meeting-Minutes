@@ -19,7 +19,9 @@ const position = ref({ top: '0px', left: '0px', width: '220px' })
 const selected = computed(() => props.options.find((option) => option.value === props.modelValue))
 const displayText = computed(() => selected.value?.label || (props.allowCustom ? String(props.modelValue || '') : ''))
 const filtered = computed(() => {
-  const keyword = query.value.trim().toLocaleLowerCase()
+  // 打开已有选中项时，输入框展示的是选项标签，不应把它误当成搜索条件。
+  const isUneditedSelection = Boolean(selected.value) && query.value === displayText.value
+  const keyword = isUneditedSelection ? '' : query.value.trim().toLocaleLowerCase()
   return keyword ? props.options.filter((option) => option.label.toLocaleLowerCase().includes(keyword)) : props.options
 })
 const canUseCustom = computed(() => props.allowCustom && query.value.trim() && !props.options.some((option) => option.label.toLocaleLowerCase() === query.value.trim().toLocaleLowerCase()))

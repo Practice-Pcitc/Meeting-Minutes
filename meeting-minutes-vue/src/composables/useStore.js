@@ -14,7 +14,7 @@ async function http(method, path, body) {
 // ===== 空状态（与后端 types.ts 保持一致） =====
 function emptyState() {
   return {
-    meeting: { id: 'default', title: '', date: '', startTime: '', endTime: '', location: '' },
+    meeting: { id: 'default', title: '', date: '', startTime: '', endTime: '', location: '', status: 'active' },
     persons: [],
     entries: [],
     topics: [],
@@ -70,8 +70,8 @@ async function mutate(method, path, body) {
 }
 
 // ===== 写操作 =====
-async function updateMeeting(patch) {
-  return mutate('PATCH', '/meeting', patch);
+async function updateMeeting(patch, meetingId = '') {
+  return mutate('PATCH', meetingId ? `/meetings/${meetingId}` : '/meeting', patch);
 }
 
 function localDateAndTime(date = new Date()) {
@@ -84,12 +84,13 @@ function localDateAndTime(date = new Date()) {
 
 async function touchMeetingEnd(date = new Date()) {
   const currentMeeting = meeting.value;
+  const meetingId = currentMeeting?.id;
   const activity = localDateAndTime(date);
   // 历史/未来会议的记录编辑不应改写其结束时间；自动更新只作用于当天会议。
-  if (!currentMeeting?.id || currentMeeting.date !== activity.date) return null;
+  if (!meetingId || currentMeeting.date !== activity.date) return null;
   // 用户手动设置了更晚的结束时间时予以保留，自动事件只向后推进。
   if (currentMeeting.endTime && currentMeeting.endTime >= activity.time) return currentMeeting;
-  return updateMeeting({ endTime: activity.time });
+  return updateMeeting({ endTime: activity.time }, meetingId);
 }
 
 async function addPerson({ name, role, color }) {
