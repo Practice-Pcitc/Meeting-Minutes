@@ -15,3 +15,4 @@
 - Full-file transcription must use VAD-based bounded segments before ASR. Never pass an unbounded meeting-length waveform directly to the Paraformer ONNX model.
 - Keep local speech runtime artifacts out of Git: `.funasr-onnx/`, `.funasr-heavy-backup/`, `.runtime/`, model caches, Python bytecode, recordings, and user data.
 - The local FunASR service contract is `POST /v1/audio/transcriptions` for completed files, `WS /v1/audio/realtime` for PCM streaming, and `GET /health` for readiness.
+- Manage the Python speech service exclusively as the uv project in `tools/pyproject.toml`. Keep `tools/uv.lock` committed, use `uv run --locked` in launch scripts, and do not reintroduce hand-maintained virtualenv or requirements installation flows.
