@@ -4,6 +4,7 @@ import { Timeline } from 'vis-timeline/standalone'
 import 'vis-timeline/styles/vis-timeline-graph2d.min.css'
 import { authFetch, authRequest } from '../composables/useAuth'
 import { useNotify } from '../composables/useNotify'
+import { useStore } from '../composables/useStore'
 
 const props = defineProps({
   recordings: { type: Array, default: () => [] },
@@ -17,6 +18,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['changed'])
 const notify = useNotify()
+const store = useStore()
 const container = ref(null)
 const activeId = ref('')
 const playing = ref(false)
@@ -29,8 +31,12 @@ const visibleStart = ref(0)
 const visibleEnd = ref(0)
 const transcriptView = ref('segments')
 const focusedSegmentId = ref('')
+const showManualEntries = ref(true)
+const hoveredEntryId = ref('')
+const selectedEntryId = ref('')
 const urls = new Map()
 const mergedSegmentElements = new Map()
+const transcriptItemElements = new Map()
 const audio = new Audio()
 let timeline = null
 let suppressRangeSync = false
@@ -38,9 +44,31 @@ let suppressRangeSync = false
 const sorted = computed(() => [...props.recordings].sort((a, b) => a.createdAt - b.createdAt))
 function itemDuration(item) { return item.duration ?? Math.max(0, Math.round((item.updatedAt - item.createdAt) / 1000)) }
 function itemEnd(item) { return item.createdAt + Math.max(itemDuration(item), 1) * 1000 }
-const timelineStart = computed(() => sorted.value[0]?.createdAt || Date.now())
-const timelineEnd = computed(() => sorted.value.length ? Math.max(...sorted.value.map(itemEnd)) : timelineStart.value)
+function entryTimestamp(entry) {
+  const parsed = new Date(String(entry.time || '').replace(' ', 'T')).getTime()
+  if (!Number.isFinite(parsed)) return Number(entry.createdAt) || Date.now()
+  const created = new Date(Number(entry.createdAt) || parsed)
+  const chosen = new Date(parsed)
+  const sameMinute = created.getFullYear() === chosen.getFullYear()
+    && created.getMonth() === chosen.getMonth()
+    && created.getDate() === chosen.getDate()
+    && created.getHours() === chosen.getHours()
+    && created.getMinutes() === chosen.getMinutes()
+  return sameMinute ? created.getTime() : parsed
+}
+const manualEntries = computed(() => [...store.entries.value]
+  .map(entry => ({ ...entry, timestamp: entryTimestamp(entry) }))
+  .sort((a, b) => a.timestamp - b.timestamp))
+const visibleManualEntries = computed(() => showManualEntries.value ? manualEntries.value : [])
+const timelinePoints = computed(() => [
+  ...sorted.value.map(item => item.createdAt),
+  ...sorted.value.map(itemEnd),
+  ...visibleManualEntries.value.map(entry => entry.timestamp),
+])
+const timelineStart = computed(() => timelinePoints.value.length ? Math.min(...timelinePoints.value) : Date.now())
+const timelineEnd = computed(() => timelinePoints.value.length ? Math.max(...timelinePoints.value) : timelineStart.value)
 const timelineSpan = computed(() => Math.max(1000, timelineEnd.value - timelineStart.value))
+const hasTimelineItems = computed(() => sorted.value.length || visibleManualEntries.value.length)
 const activeItem = computed(() => sorted.value.find(item => item.id === activeId.value))
 const totalDuration = computed(() => sorted.value.reduce((sum, item) => sum + itemDuration(item), 0))
 const transcriptCount = computed(() => sorted.value.filter(item => item.transcript).length)
@@ -76,11 +104,55 @@ const playbackSegmentId = computed(() => {
   return match?.id || ''
 })
 const highlightedSegmentId = computed(() => focusedSegmentId.value || playbackSegmentId.value)
+const playbackEntryId = computed(() => {
+  if (!playing.value || !cursorTimestamp.value) return ''
+  const nearest = manualEntries.value.reduce((best, entry) => {
+    const distance = Math.abs(entry.timestamp - cursorTimestamp.value)
+    return !best || distance < best.distance ? { id: entry.id, distance } : best
+  }, null)
+  return nearest && nearest.distance <= 8000 ? nearest.id : ''
+})
+const highlightedEntryId = computed(() => hoveredEntryId.value || selectedEntryId.value || playbackEntryId.value)
+const mergedDisplaySegments = computed(() => {
+  let previousSpeakerKey = ''
+  return mergedTranscriptSegments.value.map(segment => {
+    const speakerEntry = manualEntries.value
+      .filter(entry => entry.speakerId && entry.timestamp >= segment.item.createdAt && entry.timestamp <= segment.timestamp)
+      .at(-1)
+    const person = speakerEntry ? store.getPerson(speakerEntry.speakerId) : null
+    const speakerKey = person?.id || `recording:${segment.item.id}`
+    const showAvatar = segment.sentenceIndex === 0 || speakerKey !== previousSpeakerKey
+    previousSpeakerKey = speakerKey
+    return {
+      ...segment,
+      person,
+      showAvatar,
+      avatarText: person?.name?.charAt(0) || '录',
+      avatarTitle: person?.name || '未关联发言人',
+      avatarColor: person?.color || '#6f7f99',
+    }
+  })
+})
+function entrySpeaker(entry) { return entry.speakerId ? store.getPerson(entry.speakerId) : null }
+function entrySpeakerName(entry) { return entrySpeaker(entry)?.name || '会议记录' }
+function entryColor(entry) {
+  const value = entrySpeaker(entry)?.color || '#6f7f99'
+  return /^#[0-9a-f]{3,8}$/i.test(value) ? value : '#6f7f99'
+}
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+}
 const overviewSegments = computed(() => sorted.value.map(item => ({
   id: item.id,
   active: item.id === activeId.value,
   left: `${Math.max(0, ((item.createdAt - timelineStart.value) / timelineSpan.value) * 100)}%`,
   width: `${Math.max(.35, ((itemEnd(item) - item.createdAt) / timelineSpan.value) * 100)}%`,
+})))
+const overviewEntries = computed(() => visibleManualEntries.value.map(entry => ({
+  id: entry.id,
+  active: highlightedEntryId.value === entry.id,
+  left: `${Math.max(0, Math.min(100, ((entry.timestamp - timelineStart.value) / timelineSpan.value) * 100))}%`,
+  color: entryColor(entry),
 })))
 const overviewWindowStyle = computed(() => {
   if (!visibleStart.value || !visibleEnd.value) return { left: '0%', width: '100%' }
@@ -141,11 +213,13 @@ async function playItem(item, offset = 0) {
   try {
     loading.value = true
     focusedSegmentId.value = ''
+    selectedEntryId.value = ''
     if (activeId.value !== item.id) { audio.pause(); audio.src = await sourceFor(item); activeId.value = item.id }
     audio.currentTime = Math.max(0, Math.min(offset, itemDuration(item)))
     cursorTimestamp.value = item.createdAt + audio.currentTime * 1000
     timeline?.setSelection([item.id], { focus: false })
     timeline?.setCustomTime(new Date(cursorTimestamp.value), 'playhead')
+    timeline?.moveTo(new Date(cursorTimestamp.value), { animation: { duration: 300, easingFunction: 'easeInOutQuad' } })
     await audio.play()
   } catch (error) { notify.error(`录音播放失败：${error.message}`) }
   finally { loading.value = false }
@@ -162,6 +236,7 @@ function playNext() {
 }
 function seekTo(timestamp, itemId = '') {
   focusedSegmentId.value = ''
+  selectedEntryId.value = ''
   const item = itemId ? sorted.value.find(entry => entry.id === itemId) : sorted.value.find(entry => timestamp >= entry.createdAt && timestamp <= itemEnd(entry))
   if (item) playItem(item, (timestamp - item.createdAt) / 1000)
   else {
@@ -170,15 +245,32 @@ function seekTo(timestamp, itemId = '') {
   }
 }
 function buildItems() {
-  return sorted.value.map((item, index) => ({
-    id: item.id, content: `<span>录音 ${index + 1}</span>`, start: new Date(item.createdAt), end: new Date(itemEnd(item)), type: 'range',
+  const recordingItems = sorted.value.map((item, index) => ({
+    id: item.id, group: 'recordings', content: `<span>录音 ${index + 1}</span>`, start: new Date(item.createdAt), end: new Date(itemEnd(item)), type: 'range',
     className: activeId.value === item.id ? 'recording-range active-recording' : 'recording-range',
     title: `${formatTime(item.createdAt, true)} – ${formatTime(itemEnd(item), true)}（${formatDuration(itemDuration(item))}）`,
   }))
+  const entryItems = visibleManualEntries.value.map(entry => ({
+    id: `entry:${entry.id}`,
+    group: 'manual-entries',
+    content: '<span class="manual-entry-symbol">◆</span>',
+    start: new Date(entry.timestamp),
+    type: 'point',
+    className: highlightedEntryId.value === entry.id ? 'manual-entry-point active-entry' : 'manual-entry-point',
+    style: `--entry-color:${entryColor(entry)}`,
+    title: escapeHtml(`${formatTime(entry.timestamp, true)} · ${entrySpeakerName(entry)}${entry.topic ? ` · ${entry.topic}` : ''}\n${entry.content}`),
+  }))
+  return [...recordingItems, ...entryItems]
+}
+function buildGroups() {
+  const groups = []
+  if (sorted.value.length) groups.push({ id: 'recordings', content: '录音', order: 1 })
+  if (visibleManualEntries.value.length) groups.push({ id: 'manual-entries', content: '手动记录', order: 2 })
+  return groups
 }
 async function renderTimeline() {
   await nextTick()
-  if (!container.value || !sorted.value.length) { timeline?.destroy(); timeline = null; return }
+  if (!container.value || !hasTimelineItems.value) { timeline?.destroy(); timeline = null; return }
   const padding = Math.max(30000, timelineSpan.value * .04)
   const options = {
     stack: false, selectable: true, multiselect: false, showCurrentTime: false, showMajorLabels: true, showMinorLabels: true,
@@ -188,13 +280,31 @@ async function renderTimeline() {
     format: { minorLabels: axisMinorLabel, majorLabels: axisMajorLabel }, tooltip: { followMouse: true, overflowMethod: 'cap' },
   }
   timeline?.destroy()
-  timeline = new Timeline(container.value, buildItems(), options)
+  timeline = new Timeline(container.value, buildItems(), buildGroups(), options)
   timeline.addCustomTime(new Date(cursorTimestamp.value || timelineStart.value), 'playhead')
   timeline.setCustomTimeTitle('播放位置', 'playhead')
-  timeline.on('click', properties => { if (properties.time) seekTo(properties.time.getTime(), properties.item || '') })
+  timeline.on('click', handleTimelineClick)
+  timeline.on('itemover', properties => {
+    const id = String(properties.item || '')
+    if (id.startsWith('entry:')) hoveredEntryId.value = id.slice(6)
+  })
+  timeline.on('itemout', properties => {
+    const id = String(properties.item || '')
+    if (id === `entry:${hoveredEntryId.value}`) hoveredEntryId.value = ''
+  })
   timeline.on('rangechange', syncVisibleRange)
   timeline.on('rangechanged', () => { syncVisibleRange(); syncZoomLevel() })
   syncVisibleRange()
+}
+function handleTimelineClick(properties) {
+  if (!properties.time) return
+  const id = String(properties.item || '')
+  if (id.startsWith('entry:')) {
+    const entry = manualEntries.value.find(item => item.id === id.slice(6))
+    if (entry) locateManualEntry(entry)
+    return
+  }
+  seekTo(properties.time.getTime(), id)
 }
 function syncVisibleRange() {
   if (!timeline) return
@@ -243,9 +353,44 @@ function clearTranscriptFocus() {
   cursorTimestamp.value = activeItem.value.createdAt + currentTime.value * 1000
   try { timeline?.setCustomTime(new Date(cursorTimestamp.value), 'playhead') } catch { /* 时间轴可能正在重建 */ }
 }
+function clearMergedHover() {
+  clearTranscriptFocus()
+}
 function setMergedSegmentElement(id, element) {
   if (element) mergedSegmentElements.set(id, element)
   else mergedSegmentElements.delete(id)
+}
+function setTranscriptItemElement(id, element) {
+  if (element) transcriptItemElements.set(id, element)
+  else transcriptItemElements.delete(id)
+}
+async function locateManualEntry(entry) {
+  selectedEntryId.value = entry.id
+  hoveredEntryId.value = ''
+  focusedSegmentId.value = ''
+  cursorTimestamp.value = entry.timestamp
+  audio.pause()
+  timeline?.setSelection([`entry:${entry.id}`], { focus: false })
+  try { timeline?.setCustomTime(new Date(entry.timestamp), 'playhead') } catch { /* 时间轴可能正在重建 */ }
+  timeline?.moveTo(new Date(entry.timestamp), { animation: { duration: 320, easingFunction: 'easeInOutQuad' } })
+
+  const recordingItem = sorted.value.find(item => entry.timestamp >= item.createdAt && entry.timestamp <= itemEnd(item))
+  if (!recordingItem) {
+    activeId.value = ''
+    currentTime.value = 0
+    return
+  }
+  try {
+    loading.value = true
+    if (activeId.value !== recordingItem.id) {
+      audio.src = await sourceFor(recordingItem)
+      activeId.value = recordingItem.id
+    }
+    const offset = Math.max(0, Math.min(itemDuration(recordingItem), (entry.timestamp - recordingItem.createdAt) / 1000))
+    audio.currentTime = offset
+    currentTime.value = offset
+  } catch (error) { notify.error(`录音定位失败：${error.message}`) }
+  finally { loading.value = false }
 }
 async function downloadActive() {
   const item = activeItem.value; if (!item) return
@@ -276,12 +421,17 @@ async function transcribeAll(force = false) {
   finally { transcribing.value = false }
 }
 
-watch(() => props.recordings, renderTimeline, { deep: true })
-watch(activeId, () => { if (timeline) timeline.setItems(buildItems()) })
+watch([() => props.recordings, () => store.entries.value, showManualEntries], renderTimeline, { deep: true })
+watch([activeId, selectedEntryId, playbackEntryId], () => { if (timeline) timeline.setItems(buildItems()) })
 watch(highlightedSegmentId, async id => {
   if (!id || transcriptView.value !== 'merged') return
   await nextTick()
   mergedSegmentElements.get(id)?.scrollIntoView({ block: 'nearest', behavior: playing.value ? 'smooth' : 'auto' })
+})
+watch([activeId, transcriptView], async ([id, view]) => {
+  if (!id || view !== 'segments') return
+  await nextTick()
+  transcriptItemElements.get(id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 })
 onMounted(renderTimeline)
 onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => URL.revokeObjectURL(url)) })
@@ -292,13 +442,14 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
     <div class="timeline-section">
       <div class="timeline-heading">
         <div>
-          <h3>录音时间轴</h3>
-          <p>{{ sorted.length ? `${sorted.length} 段录音 · 有效时长 ${formatDuration(totalDuration)} · 会议跨度 ${formatDuration(timelineSpan / 1000)}` : '录制后将在这里生成可缩放时间轴' }}</p>
+          <h3>会议时间轴</h3>
+          <p>{{ hasTimelineItems ? `${sorted.length} 段录音 · ${manualEntries.length} 条手动记录 · 会议跨度 ${formatDuration(timelineSpan / 1000)}` : '录音和手动记录将按实际时间显示在这里' }}</p>
         </div>
+        <button v-if="manualEntries.length" class="manual-toggle" :class="{ active: showManualEntries }" @click="showManualEntries = !showManualEntries"><span></span>手动记录 {{ manualEntries.length }}</button>
       </div>
 
-      <div v-if="sorted.length" class="transport-bar">
-        <button class="master-play" :disabled="loading" :title="playing ? '暂停' : '播放'" @click="togglePlayback"><SvgIcon :name="playing ? 'pause' : 'play'" :size="16" /></button>
+      <div v-if="hasTimelineItems" class="transport-bar">
+        <button class="master-play" :disabled="loading || !sorted.length" :title="sorted.length ? (playing ? '暂停' : '播放') : '暂无可播放录音'" @click="togglePlayback"><SvgIcon :name="playing ? 'pause' : 'play'" :size="16" /></button>
         <div class="playback-copy">
           <strong>{{ activeItem ? `录音 ${sorted.findIndex(item => item.id === activeId) + 1}` : '从时间轴选择播放位置' }}</strong>
           <span>{{ cursorTimestamp ? formatTime(cursorTimestamp, true) : formatTime(timelineStart, true) }}<template v-if="activeItem"> · {{ formatDuration(currentTime) }} / {{ formatDuration(itemDuration(activeItem)) }}</template></span>
@@ -315,23 +466,24 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
         </div>
       </div>
 
-      <template v-if="sorted.length">
+      <template v-if="hasTimelineItems">
         <div ref="container" class="vis-timeline-host"></div>
         <div class="overview-wrap">
           <time>{{ formatTime(timelineStart) }}</time>
           <button class="overview-track" title="点击移动详细时间轴" @click="moveOverview">
             <span v-for="segment in overviewSegments" :key="segment.id" class="overview-segment" :class="{ active: segment.active }" :style="{ left: segment.left, width: segment.width }"></span>
+            <span v-for="entry in overviewEntries" :key="`entry-${entry.id}`" class="overview-entry" :class="{ active: entry.active }" :style="{ left: entry.left, '--entry-color': entry.color }"></span>
             <span class="overview-window" :style="overviewWindowStyle"></span>
             <span class="overview-cursor" :style="overviewCursorStyle"></span>
           </button>
           <time>{{ formatTime(timelineEnd) }}</time>
         </div>
-        <div class="timeline-hint"><span>滚轮缩放 · 拖动平移 · 点击精准跳转</span><span>蓝色为录音，空白为未录音时间</span></div>
+        <div class="timeline-hint"><span>滚轮缩放 · 拖动平移 · 点击精准跳转</span><span>蓝色为录音 · 菱形为手动记录</span></div>
       </template>
-      <div v-else class="timeline-empty"><span class="empty-icon"><SvgIcon name="microphone" :size="20" /></span><div><strong>还没有录音片段</strong><span>开始录音后，会议时间轴将自动生成</span></div></div>
+      <div v-else class="timeline-empty"><span class="empty-icon"><SvgIcon name="microphone" :size="20" /></span><div><strong>还没有会议事件</strong><span>开始录音或添加手动记录后，时间轴将自动生成</span></div></div>
     </div>
 
-    <section v-if="sorted.length || liveActive" class="transcript-panel">
+    <section v-if="sorted.length || liveActive || visibleManualEntries.length" class="transcript-panel">
       <div class="transcript-heading">
         <div><h4>转写记录</h4><span>{{ transcriptCount ? `已生成 ${transcriptCount} 段文字，点击段落即可播放` : '实时文字和历史转写将统一显示在这里' }}</span></div>
         <div class="transcript-toolbar">
@@ -346,7 +498,7 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
         </div>
       </div>
       <div v-if="transcriptView === 'segments'" class="transcript-list">
-        <button v-for="(item, index) in sorted" :key="item.id" class="transcript-item" :class="{ active: activeId === item.id }" @click="playItem(item)">
+        <button v-for="(item, index) in sorted" :key="item.id" :ref="element => setTranscriptItemElement(item.id, element)" class="transcript-item" :class="{ active: activeId === item.id }" @click="playItem(item)">
           <span class="transcript-time"><time>{{ formatTime(item.createdAt) }}</time><small>{{ formatDuration(itemDuration(item)) }}</small></span>
           <span class="transcript-marker"></span>
           <span class="transcript-copy"><strong>录音 {{ index + 1 }}</strong><span v-if="item.transcript">{{ item.transcript }}</span><em v-else>尚未生成文字</em></span>
@@ -363,21 +515,22 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
           </span>
         </div>
       </div>
-      <div v-else class="merged-transcript" @mouseleave="clearTranscriptFocus">
-        <div v-if="mergedTranscriptSegments.length" class="merged-copy">
-          <button
-            v-for="segment in mergedTranscriptSegments"
-            :key="segment.id"
-            :ref="element => setMergedSegmentElement(segment.id, element)"
-            class="merged-sentence"
-            :class="{ highlighted: highlightedSegmentId === segment.id, 'new-recording': segment.sentenceIndex === 0 }"
-            :title="`${formatTime(segment.timestamp, true)}，点击播放`"
-            @mouseenter="focusTranscriptSegment(segment)"
-            @focus="focusTranscriptSegment(segment)"
-            @click="playItem(segment.item, segment.offset)"
-          >
-            <small v-if="segment.sentenceIndex === 0">{{ formatTime(segment.item.createdAt) }}</small>{{ segment.text }}
-          </button>
+      <div v-else class="merged-transcript" @mouseleave="clearMergedHover">
+        <div v-if="mergedDisplaySegments.length" class="merged-copy">
+          <template v-for="segment in mergedDisplaySegments" :key="segment.id">
+            <span v-if="segment.showAvatar" class="merged-avatar" :style="{ '--avatar-color': segment.avatarColor }" :title="segment.avatarTitle">{{ segment.avatarText }}</span>
+            <button
+              :ref="element => setMergedSegmentElement(segment.id, element)"
+              class="merged-sentence"
+              :class="{ highlighted: highlightedSegmentId === segment.id, 'new-recording': segment.sentenceIndex === 0 }"
+              :title="`${formatTime(segment.timestamp, true)}，点击播放`"
+              @mouseenter="focusTranscriptSegment(segment)"
+              @focus="focusTranscriptSegment(segment)"
+              @click="playItem(segment.item, segment.offset)"
+            >
+              <small v-if="segment.sentenceIndex === 0">{{ formatTime(segment.item.createdAt) }}</small>{{ segment.text }}
+            </button>
+          </template>
           <span v-if="liveActive" class="merged-live" :class="{ active: liveTranscribing }"><i></i>{{ liveTranscript || (liveError || '实时转写等待语音…') }}</span>
         </div>
         <div v-else class="merged-empty">
@@ -395,9 +548,14 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 .timeline-heading h3,.transcript-heading h4 { color: #14213a; font-size: .94rem; }
 .timeline-heading p,.transcript-heading span { margin-top: 2px; color: var(--text-muted); font-size: .71rem; }
+.manual-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 7px; color: var(--text-muted); background: var(--surface); font-size: .69rem; white-space: nowrap; }
+.manual-toggle span { width: 7px; height: 7px; border-radius: 2px; background: #aeb7c6; transform: rotate(45deg); }
+.manual-toggle.active { border-color: var(--primary-soft); color: var(--primary); background: var(--primary-light); }
+.manual-toggle.active span { background: var(--primary); }
 .transport-bar { min-height: 54px; display: flex; align-items: center; gap: 11px; margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border-light); border-radius: 10px; background: #fafbfc; }
 .master-play { width: 36px; height: 36px; display: grid; place-items: center; flex: none; border-radius: 50%; color: #fff; background: var(--primary); box-shadow: 0 4px 10px rgba(40,100,240,.2); }
 .master-play:hover { background: var(--primary-hover); }
+.master-play:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
 .playback-copy { min-width: 185px; display: flex; flex-direction: column; }
 .playback-copy strong { font-size: .76rem; font-weight: 650; }
 .playback-copy span { color: var(--text-muted); font-size: .68rem; font-variant-numeric: tabular-nums; }
@@ -408,14 +566,21 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .zoom-controls .fit-button { font-size: .7rem; white-space: nowrap; }
 .active-actions { display: flex; gap: 5px; padding-left: 7px; border-left: 1px solid var(--border); }
 .active-actions button.danger:hover { border-color: #ffd5ce; color: var(--danger); background: var(--danger-light); }
-.vis-timeline-host { height: 112px; border: 1px solid #dfe5ee; border-radius: 9px; overflow: hidden; background: #fbfcfe; }
+.vis-timeline-host { height: 158px; border: 1px solid #dfe5ee; border-radius: 9px; overflow: hidden; background: #fbfcfe; }
 .vis-timeline-host :deep(.vis-timeline) { border: 0; font-family: inherit; }
 .vis-timeline-host :deep(.vis-panel.vis-center),.vis-timeline-host :deep(.vis-panel.vis-bottom) { border-color: #e5e9f1; }
+.vis-timeline-host :deep(.vis-labelset .vis-label) { color: #778197; border-bottom-color: #edf0f5; background: #f7f9fc; font-size: 10px; font-weight: 600; }
+.vis-timeline-host :deep(.vis-labelset .vis-label .vis-inner) { padding: 8px 9px; }
+.vis-timeline-host :deep(.vis-foreground .vis-group) { border-bottom-color: #edf0f5; }
 .vis-timeline-host :deep(.vis-time-axis .vis-text) { color: #748096; font-size: 10px; }
 .vis-timeline-host :deep(.vis-time-axis .vis-grid.vis-minor) { border-color: #edf0f5; }
 .vis-timeline-host :deep(.vis-time-axis .vis-grid.vis-major) { border-color: #dfe4ed; }
 .vis-timeline-host :deep(.vis-item.recording-range) { min-width: 3px; overflow: hidden; border: 0; border-radius: 4px; color: #fff; background: linear-gradient(90deg,#5b84f5,#2864f0); box-shadow: 0 2px 5px rgba(43,88,194,.22); cursor: pointer; }
 .vis-timeline-host :deep(.vis-item.recording-range.vis-selected),.vis-timeline-host :deep(.vis-item.active-recording) { background: linear-gradient(90deg,#7c56e8,#4d63eb); box-shadow: 0 0 0 2px rgba(100,83,221,.2); }
+.vis-timeline-host :deep(.vis-item.manual-entry-point) { border: 0; color: var(--entry-color); background: transparent; cursor: pointer; }
+.vis-timeline-host :deep(.vis-item.manual-entry-point .vis-item-content) { padding: 1px 4px; font-size: 15px; line-height: 1; transform: translateX(-7px); }
+.vis-timeline-host :deep(.vis-item.manual-entry-point.vis-selected),.vis-timeline-host :deep(.vis-item.manual-entry-point.active-entry) { color: var(--entry-color); background: transparent; box-shadow: none; filter: drop-shadow(0 0 4px color-mix(in srgb,var(--entry-color) 48%,transparent)); }
+.vis-timeline-host :deep(.vis-item.manual-entry-point.vis-selected .manual-entry-symbol),.vis-timeline-host :deep(.vis-item.manual-entry-point.active-entry .manual-entry-symbol),.vis-timeline-host :deep(.vis-item.manual-entry-point:hover .manual-entry-symbol) { display: inline-block; transform: scale(1.35); }
 .vis-timeline-host :deep(.vis-item .vis-item-content) { padding: 5px 7px; font-size: 10px; }
 .vis-timeline-host :deep(.vis-custom-time.playhead) { z-index: 20; width: 2px; background: #ef4760; pointer-events: none; }
 .overview-wrap { display: grid; grid-template-columns: 48px minmax(0,1fr) 48px; align-items: center; gap: 8px; margin-top: 9px; }
@@ -424,6 +589,8 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .overview-track { position: relative; height: 18px; overflow: hidden; border-radius: 5px; background: #edf1f7; }
 .overview-segment { position: absolute; top: 5px; height: 8px; min-width: 2px; border-radius: 2px; background: #7e9df2; pointer-events: none; }
 .overview-segment.active { background: #7057df; }
+.overview-entry { position: absolute; z-index: 2; top: 5px; width: 7px; height: 7px; margin-left: -3px; border: 1px solid #fff; border-radius: 2px; background: var(--entry-color); transform: rotate(45deg); pointer-events: none; }
+.overview-entry.active { box-shadow: 0 0 0 2px color-mix(in srgb,var(--entry-color) 28%,transparent); transform: rotate(45deg) scale(1.25); }
 .overview-window { position: absolute; top: 1px; bottom: 1px; min-width: 9px; border: 1.5px solid var(--primary); border-radius: 4px; background: rgba(40,100,240,.08); pointer-events: none; }
 .overview-cursor { position: absolute; top: 2px; bottom: 2px; width: 1px; background: #ef4760; pointer-events: none; }
 .timeline-hint { display: flex; justify-content: space-between; margin-top: 6px; color: var(--text-muted); font-size: .64rem; }
@@ -473,6 +640,8 @@ button.transcript-item.active { box-shadow: inset 3px 0 0 var(--primary); }
 .merged-live.active { color: #174bbf; background: var(--primary-light); }
 .merged-live i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #ef4760; vertical-align: 1px; }
 .merged-live.active i { animation: livePulse 1.4s ease-out infinite; }
+.merged-avatar { width: 22px; height: 22px; display: inline-grid; place-items: center; margin: 0 5px 0 8px; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--avatar-color); box-shadow: 0 0 0 1px color-mix(in srgb,var(--avatar-color) 24%,transparent); font-size: .65rem; font-weight: 700; line-height: 1; vertical-align: -6px; }
+.merged-avatar:first-child { margin-left: 0; }
 .merged-empty { min-height: 86px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: .76rem; }
 @keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(239,71,96,.4); } 70%,100% { box-shadow: 0 0 0 5px rgba(239,71,96,0); } }
 @media (max-width: 860px) { .transport-bar { flex-wrap: wrap; }.zoom-controls { order: 3; width: 100%; margin-left: 47px; }.zoom-controls input { flex: 1; }.active-actions { margin-left: auto; } }
