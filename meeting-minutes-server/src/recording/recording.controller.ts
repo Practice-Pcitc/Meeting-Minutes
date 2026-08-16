@@ -17,12 +17,20 @@ export class RecordingController {
   }
 
   @Post(':id/finish')
-  finish(@Param('meetingId') meetingId: string, @Param('id') id: string) {
-    return this.recordings.finish(meetingId, id);
+  finish(@Param('meetingId') meetingId: string, @Param('id') id: string, @Body() body: { duration?: number; transcript?: string }) {
+    return this.recordings.finish(meetingId, id, body?.duration, body?.transcript);
   }
 
   @Get('latest')
   latest(@Param('meetingId') meetingId: string) { return this.recordings.latest(meetingId); }
+
+  @Get()
+  list(@Param('meetingId') meetingId: string) { return this.recordings.list(meetingId); }
+
+  @Post(':id/transcribe')
+  transcribe(@Param('meetingId') meetingId: string, @Param('id') id: string, @Body() body: { force?: boolean }) {
+    return this.recordings.transcribe(meetingId, id, Boolean(body?.force));
+  }
 
   @Get(':id/audio')
   async audio(@Param('meetingId') meetingId: string, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {

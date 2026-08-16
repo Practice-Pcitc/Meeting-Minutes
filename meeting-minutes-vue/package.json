@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "echarts": "^6.1.0",
+    "vis-timeline": "^8.5.4",
     "vue": "^3.4.21",
     "vue-router": "^4.6.4"
   },

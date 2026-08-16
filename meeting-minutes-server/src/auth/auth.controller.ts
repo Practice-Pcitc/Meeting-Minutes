@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from './public.decorator';
+import { UserPreferences } from './auth.types';
 
 @Controller('api/auth')
 export class AuthController {
@@ -21,6 +22,11 @@ export class AuthController {
   @Get('me')
   me(@Req() request: any) {
     return request.user;
+  }
+
+  @Post('preferences')
+  preferences(@Req() request: any, @Body() body: Partial<UserPreferences>) {
+    return this.auth.updatePreferences(request.user.id, body || {});
   }
 
   @Post('logout')

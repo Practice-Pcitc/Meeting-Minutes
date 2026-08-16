@@ -203,6 +203,8 @@ export class StateService implements OnModuleInit {
         id: item.meeting.id,
         title: item.meeting.title,
         date: item.meeting.date,
+        startTime: item.meeting.startTime,
+        endTime: item.meeting.endTime,
         location: item.meeting.location,
         status: item.meeting.status,
         entryCount: item.entries.length,

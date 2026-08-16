@@ -21,6 +21,7 @@ import AppBreadcrumb from './components/AppBreadcrumb.vue'
 import NewMeetingModal from './components/NewMeetingModal.vue'
 import DateTimePicker from './components/DateTimePicker.vue'
 import AudioRecorder from './components/AudioRecorder.vue'
+import UserSettingsModal from './components/UserSettingsModal.vue'
 import { useNotify } from './composables/useNotify'
 
 const store = useStore()
@@ -35,6 +36,7 @@ const activeView = computed(() => minuteViews.has(route.query.view) ? route.quer
 const showPersonnelModal = ref(false)
 const showLabelModal = ref(false)
 const showNewMeetingModal = ref(false)
+const showUserSettingsModal = ref(false)
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
 const recordingStatus = ref('idle')
@@ -130,8 +132,10 @@ async function toggleMeetingStatus() {
     if (!confirmed) return
   }
   try {
-    await store.touchMeetingEnd()
-    await store.updateMeeting({ status: 'ended' })
+    const now = new Date()
+    const pad = value => String(value).padStart(2, '0')
+    const endTime = `${pad(now.getHours())}:${pad(now.getMinutes())}`
+    await store.updateMeeting({ status: 'ended', endTime })
     notify.success('会议已结束')
   } catch (error) { notify.error(error.message) }
 }
@@ -282,6 +286,7 @@ function setMeeting(patch) {
       @open-archive="switchTab('archive')"
       @open-meeting="switchTab('minutes')"
       @select-meeting="selectMeetingWithGuard"
+      @open-user-settings="showUserSettingsModal = true"
       @logout="handleLogout"
     />
     <div class="app-main">
@@ -368,7 +373,7 @@ function setMeeting(patch) {
         <!-- 待办事项 Tab -->
         <TodoView v-else-if="activeTab === 'todos'" />
 
-        <ArchiveView v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" @select-meeting="selectMeetingWithGuard" />
+        <ArchiveView v-else-if="activeTab === 'archive'" :recording-status="recordingStatus" @open-meeting="switchTab('minutes')" @select-meeting="selectMeetingWithGuard" />
 
         <SeatingView v-else-if="activeTab === 'seating'" />
 
@@ -419,6 +424,7 @@ function setMeeting(patch) {
     <PersonnelModal v-if="showPersonnelModal" @close="showPersonnelModal = false" />
     <LabelModal v-if="showLabelModal" @close="showLabelModal = false" />
     <NewMeetingModal v-if="showNewMeetingModal" :has-persons="Boolean(store.persons.value.length)" :has-seats="Boolean(store.seats.value.length)" :on-create="createMeeting" @close="showNewMeetingModal = false" />
+    <UserSettingsModal v-if="showUserSettingsModal" @close="showUserSettingsModal = false" />
     <NotificationCenter />
   </div>
 </template>

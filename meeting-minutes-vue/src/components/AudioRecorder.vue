@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useNotify } from '../composables/useNotify'
-import { authFetch, authRequest } from '../composables/useAuth'
+import { authFetch, authRequest, useAuth } from '../composables/useAuth'
 import AppSelect from './AppSelect.vue'
+const RecordingTimeline = defineAsyncComponent(() => import('./RecordingTimeline.vue'))
 
 const props = defineProps({
   meetingTitle: { type: String, default: '' },
@@ -11,6 +12,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['status-change'])
 const notify = useNotify()
+const { auth } = useAuth()
 const status = ref('idle')
 const seconds = ref(0)
 const audioUrl = ref('')
@@ -20,6 +22,10 @@ const audioInputs = ref([])
 const selectedDeviceId = ref(localStorage.getItem('meeting-minutes-audio-input') || '')
 const activeDeviceLabel = ref('')
 const waveformBars = ref(Array(52).fill(4))
+const recordings = ref([])
+const liveTranscript = ref('')
+const liveTranscribing = ref(false)
+const liveError = ref('')
 const audioInputOptions = computed(() => [
   { value: '', label: '系统默认麦克风' },
   ...audioInputs.value.map(device => ({ value: device.id, label: device.label })),
@@ -36,6 +42,12 @@ let resolveStop = null
 let chunks = []
 let saveQueue = Promise.resolve()
 let serverRecordingId = ''
+let realtimeSocket = null
+let realtimeWorklet = null
+let realtimeMute = null
+let realtimeWorkletUrl = ''
+let committedTranscript = ''
+let realtimeFinishPromise = null
 
 const DB_NAME = 'meeting-minutes-audio'
 const STORE_NAME = 'recordings'
@@ -112,19 +124,11 @@ async function restoreLocal() {
   }
 }
 
-async function restoreServerRecording() {
+async function loadRecordings() {
   try {
-    const info = await authRequest('GET', `/meetings/${props.meetingId}/recordings/latest`)
-    if (!info) return
-    const response = await authFetch(`/meetings/${props.meetingId}/recordings/${info.id}/audio`)
-    const blob = await response.blob()
-    if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
-    audioBlob.value = blob
-    mimeType.value = info.mimeType
-    audioUrl.value = URL.createObjectURL(blob)
-    serverRecordingId = info.id
-    status.value = 'stopped'
-  } catch { /* 没有后端录音时仍可使用本地恢复结果 */ }
+    recordings.value = await authRequest('GET', `/meetings/${props.meetingId}/recordings`)
+    if (recordings.value.length && status.value === 'idle') status.value = 'stopped'
+  } catch { recordings.value = [] }
 }
 
 function uploadChunk(chunk) {
@@ -140,6 +144,7 @@ function uploadChunk(chunk) {
 
 const recording = computed(() => status.value === 'recording')
 const paused = computed(() => status.value === 'paused')
+const localTranscription = computed(() => (auth.user?.preferences?.transcriptionProvider || 'funasr') === 'funasr')
 watch(status, value => emit('status-change', { meetingId: props.meetingId, status: value }), { immediate: true })
 const duration = computed(() => {
   const h = Math.floor(seconds.value / 3600)
@@ -199,7 +204,111 @@ function startClock() {
   stopClock()
   timer = setInterval(() => { seconds.value += 1 }, 1000)
 }
-async function reset() {
+function mergeLiveTranscript(existingValue, incomingValue) {
+  const existing = String(existingValue || '').trim()
+  const incoming = String(incomingValue || '').trim()
+  if (!incoming || incoming === existing) return existing
+  if (!existing || incoming.includes(existing)) return incoming
+  if (existing.includes(incoming)) return existing
+
+  // 累计识别可能会校正前文：前缀大体一致时，保留信息更多的版本。
+  let commonPrefix = 0
+  const prefixLimit = Math.min(existing.length, incoming.length)
+  while (commonPrefix < prefixLimit && existing[commonPrefix] === incoming[commonPrefix]) commonPrefix += 1
+  if (commonPrefix >= Math.min(8, Math.floor(existing.length * .6))) {
+    return incoming.length >= existing.length ? incoming : existing
+  }
+
+  // 分段识别只返回停顿后的新句时，寻找首尾重叠并仅追加新增文字。
+  const overlapLimit = Math.min(existing.length, incoming.length, 120)
+  for (let length = overlapLimit; length >= 2; length -= 1) {
+    if (existing.slice(-length) === incoming.slice(0, length)) return existing + incoming.slice(length)
+  }
+  const separator = /[。！？；，、,.!?;:]$/.test(existing) || /^[。！？；，、,.!?;:]/.test(incoming) ? '' : '，'
+  return `${existing}${separator}${incoming}`
+}
+function realtimeUrl() {
+  const configured = auth.user?.preferences?.funasrEndpoint || 'http://127.0.0.1:10095/v1/audio/transcriptions'
+  const url = new URL(configured)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.pathname = '/v1/audio/realtime'
+  url.search = ''
+  return url.toString()
+}
+async function startRealtimeTranscription() {
+  if (!localTranscription.value || !audioContext?.audioWorklet || !analyserSource) return
+  stopRealtimeTranscription(false)
+  committedTranscript = ''
+  liveTranscript.value = ''
+  liveError.value = ''
+  liveTranscribing.value = true
+  const processorCode = `class PcmCapture extends AudioWorkletProcessor { process(inputs) { const input = inputs[0] && inputs[0][0]; if (input) { const copy = input.slice(); this.port.postMessage(copy.buffer, [copy.buffer]) } return true } } registerProcessor('pcm-capture', PcmCapture)`
+  realtimeWorkletUrl = URL.createObjectURL(new Blob([processorCode], { type: 'text/javascript' }))
+  await audioContext.audioWorklet.addModule(realtimeWorkletUrl)
+  realtimeWorklet = new AudioWorkletNode(audioContext, 'pcm-capture')
+  realtimeMute = audioContext.createGain()
+  realtimeMute.gain.value = 0
+  analyserSource.connect(realtimeWorklet)
+  realtimeWorklet.connect(realtimeMute).connect(audioContext.destination)
+  realtimeSocket = new WebSocket(realtimeUrl())
+  realtimeSocket.binaryType = 'arraybuffer'
+  realtimeSocket.onopen = () => {
+    liveTranscribing.value = false
+    realtimeSocket.send(JSON.stringify({ type: 'start', sampleRate: audioContext.sampleRate }))
+  }
+  realtimeSocket.onmessage = event => {
+    const result = JSON.parse(event.data)
+    if (result.type === 'partial') {
+      liveTranscript.value = mergeLiveTranscript(committedTranscript, result.text)
+      liveTranscribing.value = true
+    } else if (result.type === 'final') {
+      committedTranscript = mergeLiveTranscript(committedTranscript, result.text)
+      liveTranscript.value = committedTranscript
+      liveTranscribing.value = false
+    } else if (result.type === 'error') liveError.value = result.message || '实时转写失败'
+  }
+  realtimeSocket.onerror = () => { liveError.value = '无法连接 FunASR 实时转写服务'; liveTranscribing.value = false }
+  realtimeWorklet.port.onmessage = event => {
+    if (realtimeSocket?.readyState !== WebSocket.OPEN || status.value !== 'recording') return
+    const floats = new Float32Array(event.data)
+    const pcm = new Int16Array(floats.length)
+    for (let index = 0; index < floats.length; index += 1) pcm[index] = Math.max(-32768, Math.min(32767, Math.round(floats[index] * 32767)))
+    realtimeSocket.send(pcm.buffer)
+  }
+}
+function stopRealtimeTranscription(sendEnd = true) {
+  if (sendEnd && realtimeSocket?.readyState === WebSocket.OPEN) realtimeSocket.send(JSON.stringify({ type: 'end' }))
+  realtimeWorklet?.disconnect(); realtimeMute?.disconnect()
+  realtimeWorklet = null; realtimeMute = null
+  if (realtimeWorkletUrl) URL.revokeObjectURL(realtimeWorkletUrl)
+  realtimeWorkletUrl = ''
+  const socket = realtimeSocket
+  realtimeSocket = null
+  if (socket) setTimeout(() => { if (socket.readyState < WebSocket.CLOSING) socket.close() }, sendEnd ? 1200 : 0)
+  liveTranscribing.value = false
+}
+function finishRealtimeTranscription() {
+  if (!realtimeSocket || realtimeSocket.readyState > WebSocket.OPEN) {
+    stopRealtimeTranscription(false)
+    return Promise.resolve()
+  }
+  if (realtimeFinishPromise) return realtimeFinishPromise
+  realtimeFinishPromise = new Promise(resolve => {
+    const socket = realtimeSocket
+    const finish = () => {
+      clearTimeout(timeout)
+      stopRealtimeTranscription(false)
+      realtimeFinishPromise = null
+      resolve()
+    }
+    const timeout = setTimeout(finish, 2500)
+    socket.addEventListener('close', finish, { once: true })
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'end' }))
+    else socket.addEventListener('open', () => socket.send(JSON.stringify({ type: 'end' })), { once: true })
+  })
+  return realtimeFinishPromise
+}
+async function prepareNewSegment() {
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
   audioUrl.value = ''
   audioBlob.value = null
@@ -207,10 +316,10 @@ async function reset() {
   seconds.value = 0
   status.value = 'idle'
   chunks = []
-  if (serverRecordingId) {
-    try { await authRequest('DELETE', `/meetings/${props.meetingId}/recordings/${serverRecordingId}`) } catch { notify.error('删除服务器录音失败') }
-    serverRecordingId = ''
-  }
+  serverRecordingId = ''
+  liveTranscript.value = ''
+  liveError.value = ''
+  stopRealtimeTranscription(false)
   try { await removeLocal() } catch { notify.error('删除本地录音失败') }
 }
 function supportedType() {
@@ -224,7 +333,7 @@ async function start() {
     return
   }
   try {
-    await reset()
+    await prepareNewSegment()
     stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         ...(selectedDeviceId.value ? { deviceId: { exact: selectedDeviceId.value } } : {}),
@@ -249,6 +358,7 @@ async function start() {
       uploadChunk(event.data)
     }
     recorder.onstop = async () => {
+      await finishRealtimeTranscription()
       mimeType.value = recorder.mimeType || type || 'audio/webm'
       audioBlob.value = new Blob(chunks, { type: mimeType.value })
       audioUrl.value = URL.createObjectURL(audioBlob.value)
@@ -259,13 +369,26 @@ async function start() {
       releaseStream()
       persist(false)
       try {
+        const completedRecordingId = serverRecordingId
         await saveQueue
-        await authRequest('POST', `/meetings/${props.meetingId}/recordings/${serverRecordingId}/finish`)
+        const realtimeText = liveTranscript.value.trim()
+        await authRequest('POST', `/meetings/${props.meetingId}/recordings/${completedRecordingId}/finish`, { duration: seconds.value, transcript: realtimeText })
+        await removeLocal().catch(() => {})
+        serverRecordingId = ''
+        await loadRecordings()
         notify.success('录音已保存到服务器')
+        if (realtimeText) {
+          notify.success('实时转写文本已保存')
+        } else try {
+          notify.info('正在自动将录音转为文字…')
+          await authRequest('POST', `/meetings/${props.meetingId}/recordings/${completedRecordingId}/transcribe`, {})
+          await loadRecordings()
+          notify.success('录音转写已完成')
+        } catch (error) { notify.warning(`录音已保存，但自动转写未完成：${error.message}`) }
       } catch (error) { notify.error(`服务器录音保存未完成：${error.message}`) }
     }
     recorder.onerror = () => {
-      stopClock(); releaseStream(); status.value = 'idle'
+      stopClock(); stopRealtimeTranscription(false); releaseStream(); status.value = 'idle'
       resolveStop?.()
       resolveStop = null
       stopPromise = null
@@ -274,6 +397,7 @@ async function start() {
     recorder.start(1000)
     status.value = 'recording'
     startClock()
+    startRealtimeTranscription().catch(error => { liveError.value = error.message; liveTranscribing.value = false })
   } catch (error) {
     releaseStream()
     if (['NotAllowedError', 'SecurityError'].includes(error?.name)) notify.error('无法使用麦克风，请允许浏览器访问麦克风')
@@ -286,6 +410,7 @@ function togglePause() {
   if (!recorder) return
   if (recording.value) {
     recorder.pause(); status.value = 'paused'; stopClock()
+    if (realtimeSocket?.readyState === WebSocket.OPEN) realtimeSocket.send(JSON.stringify({ type: 'flush' }))
     audioContext?.suspend().catch(() => {})
     waveformBars.value = Array(52).fill(4)
   } else if (paused.value) {
@@ -302,18 +427,9 @@ function stop() {
   return stopPromise
 }
 defineExpose({ stop })
-function download() {
-  const extension = mimeType.value.includes('mp4') ? 'm4a' : mimeType.value.includes('ogg') ? 'ogg' : 'webm'
-  const title = (props.meetingTitle || '会议录音').replace(/[\\/:*?"<>|]/g, '_')
-  const stamp = new Date().toLocaleString('sv-SE').replace(/[ :]/g, '-')
-  const link = document.createElement('a')
-  link.href = audioUrl.value
-  link.download = `${title}_${stamp}.${extension}`
-  link.click()
-}
-
 onBeforeUnmount(() => {
   stopClock()
+  stopRealtimeTranscription(false)
   if (recorder?.state !== 'inactive') recorder?.stop()
   releaseStream()
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
@@ -324,7 +440,7 @@ onMounted(async () => {
   await refreshAudioInputs()
   navigator.mediaDevices?.addEventListener?.('devicechange', refreshAudioInputs)
   await restoreLocal()
-  await restoreServerRecording()
+  await loadRecordings()
 })
 </script>
 
@@ -332,14 +448,14 @@ onMounted(async () => {
   <section class="audio-recorder" :class="{ active: recording || paused }" aria-label="会议录音">
     <div class="recorder-main">
       <div class="recorder-state">
-        <div class="status-label"><span class="record-dot" :class="{ pulse: recording }"></span>{{ recording ? '录音中' : paused ? '已暂停' : audioUrl ? '录音已完成' : '准备录音' }}</div>
+        <div class="status-label"><span class="record-dot" :class="{ pulse: recording }"></span>{{ recording ? '录音中' : paused ? '已暂停' : recordings.length ? '可继续录制' : '准备录音' }}</div>
         <strong class="record-time" aria-live="polite">{{ duration }}</strong>
       </div>
       <div class="wave-area" :class="{ moving: recording }" aria-hidden="true">
         <i v-for="(height, index) in waveformBars" :key="index" :style="{ height: `${height}px` }"></i>
       </div>
       <div class="recorder-actions">
-        <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" :disabled="meetingEnded" :title="meetingEnded ? '请先重新开启会议' : ''" @click="start"><span class="button-dot"></span>{{ meetingEnded ? '会议已结束' : audioUrl ? '重新录音' : '开始录音' }}</button>
+        <button v-if="status === 'idle' || status === 'stopped'" class="btn btn-primary record-start" :disabled="meetingEnded" :title="meetingEnded ? '请先重新开启会议' : ''" @click="start"><span class="button-dot"></span>{{ meetingEnded ? '会议已结束' : recordings.length ? '继续录制' : '开始录音' }}</button>
         <button v-if="recording || paused" class="btn btn-ghost" @click="togglePause"><span class="pause-icon">{{ paused ? '▶' : 'Ⅱ' }}</span>{{ paused ? '继续' : '暂停' }}</button>
         <button v-if="recording || paused" class="btn stop-button" @click="stop"><span class="stop-icon"></span>结束录音</button>
       </div>
@@ -351,10 +467,21 @@ onMounted(async () => {
         <AppSelect v-model="selectedDeviceId" :options="audioInputOptions" :clearable="false" :disabled="recording || paused" placeholder="选择录音输入源" />
       </label>
       <span v-if="recording || paused" class="active-source" :title="activeDeviceLabel">当前：{{ activeDeviceLabel }}</span>
-      <span class="save-status"><b>✓</b>{{ recording ? '正在实时保存到服务器' : audioUrl ? '已保存到服务器' : '录音将实时保存到服务器' }}</span>
-      <div v-if="audioUrl" class="playback"><audio :src="audioUrl" controls preload="metadata" /><button class="btn btn-ghost btn-sm" @click="download">下载录音</button><button class="btn-icon delete-recording" title="删除服务器录音" @click="reset">×</button></div>
+      <span class="save-status"><b>✓</b>{{ recording ? '正在实时保存到服务器' : recordings.length ? `已保存 ${recordings.length} 段录音` : '录音将实时保存到服务器' }}</span>
     </div>
+    <section v-if="recording || paused || liveTranscript" class="live-transcript" aria-live="polite">
+      <div class="live-transcript-heading">
+        <span><i :class="{ active: recording }"></i>实时转写</span>
+        <small v-if="!localTranscription">请在用户设置中切换到 FunASR</small>
+        <small v-else>{{ liveTranscribing ? '正在识别…' : paused ? '已暂停' : '持续更新' }}</small>
+      </div>
+      <p v-if="liveTranscript">{{ liveTranscript }}</p>
+      <p v-else-if="!localTranscription" class="live-placeholder">云端引擎不会进行滚动转写，避免产生重复费用。</p>
+      <p v-else-if="liveError" class="live-error">{{ liveError }}</p>
+      <p v-else class="live-placeholder">开始说话后，文字会在这里持续出现…</p>
+    </section>
   </section>
+  <RecordingTimeline :recordings="recordings" :meeting-id="meetingId" :meeting-title="meetingTitle" @changed="loadRecordings" />
 </template>
 
 <style scoped>
@@ -385,10 +512,11 @@ onMounted(async () => {
 .active-source { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .save-status { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); }
 .save-status b { width: 16px; height: 16px; display: inline-grid; place-items: center; border: 1px solid #54b888; border-radius: 50%; color: #2aa46c; font-size: .65rem; }
-.playback { margin-left: auto; display: flex; align-items: center; gap: 7px; }
-.playback audio { width: 230px; height: 30px; }
-.delete-recording { width: 30px; height: 30px; color: var(--text-muted); font-size: 20px; }
+.live-transcript { margin-top: 12px; padding: 12px 14px; border: 1px solid #e1e9f8; border-radius: 9px; background: #f8faff; }
+.live-transcript-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: #294b91; font-size: .76rem; font-weight: 650; }
+.live-transcript-heading span { display: inline-flex; align-items: center; gap: 7px; }.live-transcript-heading i { width: 7px; height: 7px; border-radius: 50%; background: #aeb9ca; }.live-transcript-heading i.active { background: #ef4444; animation: pulse 1.4s ease-out infinite; }.live-transcript-heading small { color: var(--text-muted); font-size: .67rem; font-weight: 400; }
+.live-transcript p { color: var(--text); font-size: .84rem; line-height: 1.7; white-space: pre-wrap; }.live-transcript .live-placeholder { color: var(--text-muted); }.live-transcript .live-error { color: var(--danger); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.45); } 70%,100% { box-shadow: 0 0 0 7px rgba(239,68,68,0); } }
-@media (max-width: 980px) { .wave-area { display: none; } .playback audio { width: 180px; } }
-@media (max-width: 760px) { .audio-recorder { padding: 16px; } .recorder-main { flex-wrap: wrap; gap: 14px; } .recorder-actions { margin-left: auto; } .save-row { flex-wrap: wrap; gap: 8px 16px; } .playback { flex-basis: 100%; margin-left: 0; } }
+@media (max-width: 980px) { .wave-area { display: none; } }
+@media (max-width: 760px) { .audio-recorder { padding: 16px; } .recorder-main { flex-wrap: wrap; gap: 14px; } .recorder-actions { margin-left: auto; } .save-row { flex-wrap: wrap; gap: 8px 16px; } }
 </style>

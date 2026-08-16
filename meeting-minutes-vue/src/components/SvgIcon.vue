@@ -11,6 +11,25 @@ import { h } from 'vue'
  * Register globally so no per-component import needed.
  */
 const ICONS = {
+  play: [
+    ['polygon', { points: '5 3 19 12 5 21 5 3', fill: 'currentColor' }]
+  ],
+  pause: [
+    ['rect', { x: 6, y: 4, width: 4, height: 16, rx: 1, fill: 'currentColor', stroke: 'none' }],
+    ['rect', { x: 14, y: 4, width: 4, height: 16, rx: 1, fill: 'currentColor', stroke: 'none' }]
+  ],
+  plus: [
+    ['line', { x1: 12, y1: 5, x2: 12, y2: 19 }],
+    ['line', { x1: 5, y1: 12, x2: 19, y2: 12 }]
+  ],
+  minus: [
+    ['line', { x1: 5, y1: 12, x2: 19, y2: 12 }]
+  ],
+  timer: [
+    ['line', { x1: 10, y1: 2, x2: 14, y2: 2 }],
+    ['line', { x1: 12, y1: 14, x2: 15, y2: 11 }],
+    ['circle', { cx: 12, cy: 14, r: 8 }]
+  ],
   square: [
     ['rect', { x: 4, y: 4, width: 16, height: 16, rx: 2 }]
   ],

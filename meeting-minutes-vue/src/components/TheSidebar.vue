@@ -8,7 +8,7 @@ const props = defineProps({
   recordingStatus: { type: String, default: 'idle' },
   meetingEnded: Boolean,
 })
-const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'select-meeting', 'logout'])
+const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'select-meeting', 'open-user-settings', 'logout'])
 const store = useStore()
 const route = useRoute()
 const { auth } = useAuth()
@@ -92,6 +92,7 @@ function meetingStatus(meeting) {
           <strong>{{ auth.user?.displayName }}</strong>
           <span>@{{ auth.user?.username }}</span>
         </div>
+        <button class="settings-action" @click="showUserMenu = false; emit('open-user-settings')"><SvgIcon name="settings" :size="15" /> 语音转写设置</button>
         <button @click="emit('logout')"><SvgIcon name="log-out" :size="15" /> 退出登录</button>
       </div>
       <button class="sidebar-footer" @click="showUserMenu = !showUserMenu">
@@ -272,4 +273,6 @@ function meetingStatus(meeting) {
 .user-menu-account span { color: var(--sidebar-text); font-size: .7rem; }
 .user-menu button { width: 100%; display: flex; align-items: center; gap: 8px; margin-top: 5px; padding: 7px 9px; border-radius: 5px; color: #f3a69b; font-size: .78rem; }
 .user-menu button:hover { background: rgba(232,80,58,.12); }
+.user-menu button.settings-action { color: #dce8fa; }
+.user-menu button.settings-action:hover { background: rgba(79,109,245,.16); }
 </style>

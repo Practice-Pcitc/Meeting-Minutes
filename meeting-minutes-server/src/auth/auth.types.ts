@@ -3,6 +3,14 @@ export interface AuthUser {
   username: string;
   displayName: string;
   createdAt: number;
+  preferences: UserPreferences;
+}
+
+export type TranscriptionProvider = 'funasr' | 'openai';
+
+export interface UserPreferences {
+  transcriptionProvider: TranscriptionProvider;
+  funasrEndpoint: string;
 }
 
 export interface StoredUser extends AuthUser {

@@ -90,6 +90,11 @@ async function logout() {
   }
 }
 
+async function updatePreferences(preferences) {
+  auth.user = await authRequest('POST', '/auth/preferences', preferences)
+  return auth.user
+}
+
 restoreSession()
 
 export function useAuth() {
@@ -99,5 +104,6 @@ export function useAuth() {
     login,
     register,
     logout,
+    updatePreferences,
   }
 }

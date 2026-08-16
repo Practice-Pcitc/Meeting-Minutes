@@ -4,7 +4,7 @@ import * as path from 'path';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
 import { promisify } from 'util';
 import { v4 as uuid } from 'uuid';
-import { AuthStore, AuthUser, StoredUser } from './auth.types';
+import { AuthStore, AuthUser, StoredUser, UserPreferences } from './auth.types';
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
@@ -43,7 +43,7 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('该用户名已被使用');
     }
     const user: StoredUser = {
-      id: uuid(), username, displayName, passwordHash, passwordSalt, createdAt: Date.now(),
+      id: uuid(), username, displayName, passwordHash, passwordSalt, createdAt: Date.now(), preferences: this.defaultPreferences(),
     };
     this.store.users.push(user);
     const token = this.createSession(user.id);
@@ -76,6 +76,34 @@ export class AuthService implements OnModuleInit {
     const tokenHash = this.hashToken(token);
     this.store.sessions = this.store.sessions.filter((item) => item.tokenHash !== tokenHash);
     await this.persist();
+  }
+
+  getUser(userId: string): AuthUser | null {
+    const user = this.store.users.find((item) => item.id === userId);
+    return user ? this.toPublicUser(user) : null;
+  }
+
+  async updatePreferences(userId: string, input: Partial<UserPreferences>) {
+    const user = this.store.users.find((item) => item.id === userId);
+    if (!user) throw new UnauthorizedException('用户不存在或登录已失效');
+    const provider = input?.transcriptionProvider;
+    if (provider !== undefined && provider !== 'funasr' && provider !== 'openai') throw new BadRequestException('不支持该语音转写引擎');
+    let funasrEndpoint = input?.funasrEndpoint?.trim();
+    if (funasrEndpoint !== undefined) {
+      if (!funasrEndpoint) throw new BadRequestException('请填写 FunASR 服务地址');
+      try {
+        const url = new URL(funasrEndpoint);
+        if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
+        funasrEndpoint = url.toString();
+      } catch { throw new BadRequestException('FunASR 服务地址格式不正确'); }
+    }
+    user.preferences = {
+      ...this.defaultPreferences(), ...(user.preferences || {}),
+      ...(provider !== undefined ? { transcriptionProvider: provider } : {}),
+      ...(funasrEndpoint !== undefined ? { funasrEndpoint } : {}),
+    };
+    await this.persist();
+    return this.toPublicUser(user);
   }
 
   private validateRegistration(username: string, password: string, displayName: string) {
@@ -123,7 +151,11 @@ export class AuthService implements OnModuleInit {
   }
 
   private toPublicUser(user: StoredUser): AuthUser {
-    return { id: user.id, username: user.username, displayName: user.displayName, createdAt: user.createdAt };
+    return { id: user.id, username: user.username, displayName: user.displayName, createdAt: user.createdAt, preferences: { ...this.defaultPreferences(), ...(user.preferences || {}) } };
+  }
+
+  private defaultPreferences(): UserPreferences {
+    return { transcriptionProvider: 'funasr', funasrEndpoint: process.env.FUNASR_TRANSCRIBE_ENDPOINT || 'http://127.0.0.1:10095/v1/audio/transcriptions' };
   }
 
   private async persist() {
