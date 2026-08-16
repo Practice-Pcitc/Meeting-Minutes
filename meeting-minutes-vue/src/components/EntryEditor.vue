@@ -142,8 +142,10 @@ function focusEditor() { isExpanded.value = true }
 .entry-editor {
   flex-shrink: 0;
   background: var(--surface);
-  border-top: 1px solid var(--border);
-  padding: 12px 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
   transition: var(--transition);
 }
 .entry-editor.expanded { box-shadow: 0 -4px 12px rgba(0,0,0,.04); }

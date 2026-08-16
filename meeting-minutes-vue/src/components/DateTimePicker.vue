@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 defineOptions({ name: 'DateTimePicker' })
 
@@ -10,6 +10,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue'])
 const trigger = ref(null)
+const popover = ref(null)
 const open = ref(false)
 const yearPanel = ref(false)
 const position = ref({ top: '0px', left: '0px' })
@@ -65,6 +66,8 @@ async function toggle() {
   yearPageStart.value = Math.floor(cursorYear.value / 12) * 12
   await nextTick()
   updatePosition()
+  await nextTick()
+  updatePosition()
   window.addEventListener('resize', updatePosition)
   window.addEventListener('scroll', updatePosition, true)
 }
@@ -77,9 +80,9 @@ function updatePosition() {
   const rect = trigger.value?.getBoundingClientRect()
   if (!rect) return
   const width = props.mode === 'date' ? 320 : 280
-  const height = props.mode === 'date' ? 390 : 350
+  const height = popover.value?.offsetHeight || (props.mode === 'date' ? 366 : 341)
   const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
-  const top = window.innerHeight - rect.bottom >= height || rect.top < height ? rect.bottom + 8 : rect.top - height - 8
+  const top = window.innerHeight - rect.bottom >= height + 8 || rect.top < height + 8 ? rect.bottom + 8 : rect.top - height - 8
   position.value = { left: `${left}px`, top: `${Math.max(12, top)}px` }
 }
 function changeMonth(delta) {
@@ -116,6 +119,7 @@ function updateTimePart(value) {
   emit('update:modelValue', value ? `${date}T${value}` : '')
 }
 onBeforeUnmount(close)
+watch(yearPanel, async () => { if (open.value) { await nextTick(); updatePosition() } })
 </script>
 
 <template>
@@ -130,7 +134,7 @@ onBeforeUnmount(close)
     </button>
     <Teleport to="body">
     <div v-if="open" class="picker-dismiss" @click="close"></div>
-    <div v-if="open" class="picker-popover" :class="`picker-${mode}`" :style="position">
+    <div v-if="open" ref="popover" class="picker-popover" :class="`picker-${mode}`" :style="position">
       <template v-if="mode === 'date'">
         <div class="calendar-header">
           <button type="button" aria-label="上个月" @click="changeMonth(-1)">‹</button>

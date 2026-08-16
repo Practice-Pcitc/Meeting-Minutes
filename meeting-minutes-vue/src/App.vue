@@ -3,27 +3,28 @@ import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from './composables/useStore'
 import { useAuth } from './composables/useAuth'
-import LoginPage from './components/LoginPage.vue'
+import LoginView from './views/LoginView.vue'
 import TheSidebar from './components/TheSidebar.vue'
 import TheHeader from './components/TheHeader.vue'
-import TimelineView from './components/TimelineView.vue'
-import SpeakerView from './components/SpeakerView.vue'
-import TopicView from './components/TopicView.vue'
+import TimelineView from './views/TimelineView.vue'
+import SpeakerView from './views/SpeakerView.vue'
+import TopicView from './views/TopicView.vue'
 import SummaryPanel from './components/SummaryPanel.vue'
-import TodoPanel from './components/TodoPanel.vue'
+import TodoView from './views/TodoView.vue'
 import EntryEditor from './components/EntryEditor.vue'
 import PersonnelModal from './components/PersonnelModal.vue'
 import LabelModal from './components/LabelModal.vue'
 import NotificationCenter from './components/NotificationCenter.vue'
-import MeetingArchive from './components/MeetingArchive.vue'
-import SeatingChart from './components/SeatingChart.vue'
+import ArchiveView from './views/ArchiveView.vue'
+import SeatingView from './views/SeatingView.vue'
 import AppBreadcrumb from './components/AppBreadcrumb.vue'
 import NewMeetingModal from './components/NewMeetingModal.vue'
 import DateTimePicker from './components/DateTimePicker.vue'
+import AudioRecorder from './components/AudioRecorder.vue'
 import { useNotify } from './composables/useNotify'
 
 const store = useStore()
-const MindMapView = defineAsyncComponent(() => import('./components/MindMapView.vue'))
+const MindMapView = defineAsyncComponent(() => import('./views/MindMapView.vue'))
 const { auth, isAuthenticated, logout } = useAuth()
 const notify = useNotify()
 const route = useRoute()
@@ -68,22 +69,24 @@ async function handleLogout() {
 }
 
 const tabs = [
-  { key: 'minutes', label: '纪要', icon: 'file-text' },
-  { key: 'summary', label: '智能摘要', icon: 'sparkles' },
+  { key: 'minutes', label: '手动记录', icon: 'edit-3' },
+  { key: 'recording', label: '自动录音', icon: 'microphone' },
+  { key: 'summary', label: '会议纪要', icon: 'sparkles' },
   { key: 'todos', label: '待办事项', icon: 'check-square' },
   { key: 'seating', label: '座位图', icon: 'users' },
   { key: 'settings', label: '设置', icon: 'settings' }
 ]
 
 const viewTabs = [
-  { key: 'timeline', label: '时间轴视图', icon: 'clock' },
-  { key: 'speaker', label: '发言人视图', icon: 'users' },
-  { key: 'topic', label: '主题视图', icon: 'tag' },
-  { key: 'mindmap', label: '思维导图视图', icon: 'git-branch' }
+  { key: 'timeline', label: '时间轴', icon: 'clock' },
+  { key: 'speaker', label: '发言人', icon: 'users' },
+  { key: 'topic', label: '主题', icon: 'tag' },
+  { key: 'mindmap', label: '思维导图', icon: 'git-branch' }
 ]
 
 const pageLabels = {
-  minutes: '纪要',
+  minutes: '手动记录',
+  recording: '自动录音',
   summary: '智能摘要',
   todos: '待办事项',
   seating: '座位图',
@@ -164,7 +167,7 @@ function setMeeting(patch) {
     <div class="loading-mark"><SvgIcon name="clipboard" :size="26" /></div>
     <span>正在加载…</span>
   </div>
-  <LoginPage v-else-if="!isAuthenticated" />
+  <LoginView v-else-if="!isAuthenticated" />
   <div v-else class="app-layout">
     <TheSidebar
       @open-personnel="showPersonnelModal = true"
@@ -172,16 +175,19 @@ function setMeeting(patch) {
       @new-meeting="openNewMeetingModal"
       @open-settings="switchTab('settings')"
       @open-archive="switchTab('archive')"
+      @open-meeting="switchTab('minutes')"
       @logout="handleLogout"
     />
     <div class="app-main">
       <AppBreadcrumb :items="breadcrumbs" @navigate="navigateBreadcrumb" />
       <TheHeader
+        v-if="activeTab !== 'archive'"
         :active-tab="activeTab"
         :tabs="tabs"
         @switch-tab="switchTab"
         @toggle-summary="toggleSummary"
         @open-personnel="showPersonnelModal = true"
+        @open-label="showLabelModal = true"
       />
       <div v-if="store.state.error" class="connection-error">
         {{ store.state.error }}
@@ -189,50 +195,30 @@ function setMeeting(patch) {
       </div>
       <div v-if="store.state.loading && !store.state.ready" class="content-loading">正在加载你的纪要…</div>
       <div class="content-area">
+        <!-- 录音组件保持挂载，切换到其他功能后仍在后台继续录音。 -->
+        <div
+          v-if="store.meetings.value.length"
+          v-show="activeTab === 'recording'"
+          class="recording-tab"
+        >
+          <div class="recording-intro">
+            <div>
+              <h2>自动录音</h2>
+              <p>开始后可切换到手动记录或其他页面，录音会在后台持续进行。</p>
+            </div>
+            <span class="background-chip"><SvgIcon name="check-circle" :size="14" /> 独立运行</span>
+          </div>
+          <AudioRecorder
+            :key="store.activeMeetingId.value"
+            :meeting-id="store.activeMeetingId.value"
+            :meeting-title="store.meeting.value.title"
+          />
+        </div>
+
         <!-- 纪要 Tab -->
         <template v-if="activeTab === 'minutes'">
           <div class="minutes-layout">
             <div class="minutes-center">
-              <!-- 会议信息卡 -->
-              <div class="meeting-info-card">
-                <div class="meeting-info-left">
-                  <div class="meeting-title-row">
-                    <input
-                      class="meeting-title-input"
-                      :value="store.meeting.value.title"
-                      @input="setMeeting({ title: $event.target.value })"
-                      placeholder="点击填写会议标题"
-                    />
-                  </div>
-                  <div class="meeting-meta-row">
-                    <span class="meta-item"><SvgIcon name="calendar" :size="13" /> {{ store.meeting.value.date || '未设置日期' }}</span>
-                    <span v-if="store.meeting.value.startTime || store.meeting.value.endTime" class="meta-item">
-                      <SvgIcon name="clock" :size="13" /> {{ store.meeting.value.startTime || '?' }} - {{ store.meeting.value.endTime || '?' }}
-                    </span>
-                    <span v-if="store.meeting.value.location" class="meta-item">
-                      <SvgIcon name="map-pin" :size="13" /> {{ store.meeting.value.location }}
-                    </span>
-                  </div>
-                </div>
-                <div class="meeting-info-right">
-                  <div v-if="store.persons.value.length" class="attendee-avatars">
-                    <div
-                      v-for="p in store.persons.value.slice(0, 5)"
-                      :key="p.id"
-                      class="avatar attendee-avatar"
-                      :style="{ background: p.color }"
-                      :title="p.name + (p.role ? ' · ' + p.role : '')"
-                    >{{ p.name.charAt(0) }}</div>
-                    <div v-if="store.persons.value.length > 5" class="avatar attendee-avatar attendee-more">
-                      +{{ store.persons.value.length - 5 }}
-                    </div>
-                  </div>
-                  <button class="btn btn-ghost btn-sm" @click="showPersonnelModal = true">
-                    <SvgIcon name="users" :size="14" /> 管理人员
-                  </button>
-                </div>
-              </div>
-
               <!-- 视图切换 -->
               <div class="view-switcher">
                 <button
@@ -267,11 +253,11 @@ function setMeeting(patch) {
         </template>
 
         <!-- 待办事项 Tab -->
-        <TodoPanel v-else-if="activeTab === 'todos'" />
+        <TodoView v-else-if="activeTab === 'todos'" />
 
-        <MeetingArchive v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" />
+        <ArchiveView v-else-if="activeTab === 'archive'" @open-meeting="switchTab('minutes')" />
 
-        <SeatingChart v-else-if="activeTab === 'seating'" />
+        <SeatingView v-else-if="activeTab === 'seating'" />
 
         <!-- 智能摘要 Tab -->
         <div v-else-if="activeTab === 'summary'" class="summary-tab">
@@ -319,7 +305,7 @@ function setMeeting(patch) {
     <!-- 人员管理弹窗 -->
     <PersonnelModal v-if="showPersonnelModal" @close="showPersonnelModal = false" />
     <LabelModal v-if="showLabelModal" @close="showLabelModal = false" />
-    <NewMeetingModal v-if="showNewMeetingModal" :has-persons="Boolean(store.persons.value.length)" :on-create="createMeeting" @close="showNewMeetingModal = false" />
+    <NewMeetingModal v-if="showNewMeetingModal" :has-persons="Boolean(store.persons.value.length)" :has-seats="Boolean(store.seats.value.length)" :on-create="createMeeting" @close="showNewMeetingModal = false" />
     <NotificationCenter />
   </div>
 </template>
@@ -376,6 +362,9 @@ function setMeeting(patch) {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  background: var(--bg-secondary);
+  padding: 18px 20px 0;
+  gap: 12px;
 }
 
 .meeting-info-card {
@@ -438,7 +427,7 @@ function setMeeting(patch) {
 .view-switcher {
   display: flex;
   gap: 2px;
-  padding: 8px 24px;
+  padding: 0 4px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -459,7 +448,37 @@ function setMeeting(patch) {
 .view-content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px;
+  padding: 16px 4px;
+}
+.recording-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px;
+  background: var(--bg-secondary);
+}
+.recording-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 1080px;
+  margin: 0 auto 18px;
+}
+.recording-intro h2 { color: #14213a; font-size: 1.2rem; }
+.recording-intro p { margin-top: 4px; color: var(--text-muted); font-size: .82rem; }
+.recording-tab :deep(.audio-recorder) { max-width: 1080px; margin: 0 auto; }
+.background-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  color: var(--success);
+  background: var(--success-light);
+  font-size: .75rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .slide-right-enter-active, .slide-right-leave-active { transition: all .25s ease; }

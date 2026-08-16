@@ -7,7 +7,7 @@ defineProps({
   activeTab: String,
   tabs: Array
 })
-const emit = defineEmits(['switch-tab', 'toggle-summary', 'open-personnel'])
+const emit = defineEmits(['switch-tab', 'toggle-summary', 'open-personnel', 'open-label'])
 const store = useStore()
 const notify = useNotify()
 
@@ -99,67 +99,82 @@ async function handleShare() {
 
 <template>
   <header class="app-header">
+    <div class="meeting-heading">
+      <div class="heading-copy">
+        <div class="title-line">
+          <h1>{{ store.meeting.value.title || '未命名会议' }}</h1>
+          <span v-if="activeTab === 'minutes' || activeTab === 'recording'" class="live-chip"><i></i> 会议进行中</span>
+        </div>
+        <div class="meeting-meta">
+          <span><SvgIcon name="calendar" :size="13" />{{ store.meeting.value.date || '未设置日期' }}</span>
+          <span v-if="store.meeting.value.startTime || store.meeting.value.endTime"><SvgIcon name="clock" :size="13" />{{ store.meeting.value.startTime || '?' }} - {{ store.meeting.value.endTime || '?' }}</span>
+          <span v-if="store.meeting.value.location"><SvgIcon name="map-pin" :size="13" />{{ store.meeting.value.location }}</span>
+          <span v-if="store.persons.value.length" class="mini-attendees">
+            <b v-for="p in store.persons.value.slice(0, 4)" :key="p.id" :style="{ background: p.color }" :title="p.name">{{ p.name.charAt(0) }}</b>
+            <em v-if="store.persons.value.length > 4">+{{ store.persons.value.length - 4 }}</em>
+          </span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-ghost" @click="emit('open-label')"><SvgIcon name="tag" :size="15" /> 标签</button>
+        <button class="btn btn-ghost" @click="emit('open-personnel')"><SvgIcon name="users" :size="15" /> 参会人员</button>
+        <button class="btn btn-ghost" @click="handleExport" :disabled="!store.entries.value.length" title="导出为 Markdown">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>导出
+        </button>
+        <button class="btn-icon panel-toggle" title="收起/展开会议助手" @click="emit('toggle-summary')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button>
+      </div>
+    </div>
     <nav class="header-tabs">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        class="header-tab"
-        :class="{ active: activeTab === tab.key }"
-        @click="emit('switch-tab', tab.key)"
-      >
-        <SvgIcon :name="tab.icon" :size="15" class="tab-icon" />
+      <button v-for="tab in tabs" :key="tab.key" class="header-tab" :class="{ active: activeTab === tab.key }" @click="emit('switch-tab', tab.key)">
+        <SvgIcon :name="tab.icon" :size="17" class="tab-icon" />
         {{ tab.label }}
       </button>
     </nav>
-
-    <div class="header-actions">
-      <button class="btn-icon" title="收起/展开摘要面板" @click="emit('toggle-summary')">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
-      </button>
-      <button class="btn btn-ghost btn-sm" @click="handleExport" :disabled="!store.entries.value.length" title="导出为 Markdown">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        导出
-      </button>
-      <button class="btn btn-ghost btn-sm" @click="handleShare" :disabled="!store.entries.value.length" title="复制 Markdown 到剪贴板">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-        分享
-      </button>
-    </div>
   </header>
 </template>
 
 <style scoped>
 .app-header {
-  height: var(--header-h);
+  min-height: 112px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
+  flex-direction: column;
   flex-shrink: 0;
   z-index: 10;
 }
+.meeting-heading { width: 100%; min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px 24px 8px; }
+.heading-copy { min-width: 0; }
+.title-line { display: flex; align-items: center; gap: 10px; }
+.title-line h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.25rem; line-height: 1.4; font-weight: 750; color: #14213a; }
+.live-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; color: #e34444; background: #fff0f0; border-radius: 999px; font-size: .7rem; font-weight: 650; white-space: nowrap; }
+.live-chip i { width: 6px; height: 6px; border-radius: 50%; background: #ef4444; }
+.meeting-meta { display: flex; align-items: center; gap: 16px; margin-top: 5px; color: var(--text-secondary); font-size: .76rem; }
+.meeting-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.mini-attendees { margin-left: 3px; }
+.mini-attendees b,.mini-attendees em { width: 24px; height: 24px; display: inline-grid; place-items: center; margin-left: -5px; border: 2px solid #fff; border-radius: 50%; color: #fff; font-size: .65rem; font-style: normal; }
+.mini-attendees em { background: #eef2f8; color: var(--text-secondary); }
 
 .header-tabs {
+  width: 100%;
   display: flex;
   align-items: center;
-  height: 100%;
-  margin-left: -20px;
+  height: 42px;
+  padding: 0 24px;
 }
 .header-tab {
   display: flex;
   align-items: center;
   gap: 6px;
   height: 100%;
-  padding: 0 20px;
+  padding: 0 18px;
   font-size: .88rem;
   color: var(--text-secondary);
   transition: var(--transition);
   position: relative;
   border-bottom: 2px solid transparent;
 }
-.header-tab:hover { color: var(--text); background: var(--bg-secondary); }
+.header-tab:hover { color: var(--primary); }
 .header-tab.active {
   color: var(--primary);
   font-weight: 600;
@@ -174,4 +189,7 @@ async function handleShare() {
   align-items: center;
   gap: 6px;
 }
+.header-actions .btn { height: 36px; }
+.panel-toggle { width: 36px; height: 36px; border: 1px solid var(--border); }
+@media (max-width: 900px) { .meeting-meta span:nth-child(3),.mini-attendees { display: none; } .header-actions .btn:nth-child(-n+2) { display: none; } }
 </style>

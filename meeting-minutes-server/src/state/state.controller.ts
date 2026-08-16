@@ -24,7 +24,7 @@ export class StateController {
   }
 
   @Post('meetings')
-  createMeeting(@Body() body: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean }) {
+  createMeeting(@Body() body: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean }) {
     return this.svc.createMeeting(body || {});
   }
 

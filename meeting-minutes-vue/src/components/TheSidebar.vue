@@ -1,86 +1,77 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useStore } from '../composables/useStore'
 import { useAuth } from '../composables/useAuth'
 
-const emit = defineEmits(['open-personnel', 'open-label', 'new-meeting', 'open-settings', 'open-archive', 'logout'])
+const emit = defineEmits(['new-meeting', 'open-archive', 'open-meeting', 'logout'])
 const store = useStore()
+const route = useRoute()
 const { auth } = useAuth()
 const showUserMenu = ref(false)
 const userInitial = computed(() => (auth.user?.displayName || auth.user?.username || '用').charAt(0))
 
 const TAG_COLORS = ['#4f6df5', '#2bb673', '#f5a623', '#e8503a', '#8b5cf6', '#0ea5e9']
-function tagColor(name) {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h)
-  return TAG_COLORS[Math.abs(h) % TAG_COLORS.length]
-}
-
-// 只保留一个真正能用的导航项：我的纪要
-const navItems = computed(() => [
-  { key: 'mine', label: '我的纪要', icon: 'file', badge: store.meetings.value.length },
-])
+const activeMeeting = computed(() => store.meetings.value.find(meeting => meeting.id === store.activeMeetingId.value))
+const recentMeetings = computed(() => store.meetings.value.filter(meeting => meeting.id !== store.activeMeetingId.value).slice(0, 4))
+const isArchive = computed(() => route.meta.tab === 'archive')
 
 function newMeeting() {
   emit('new-meeting')
 }
 
-function addLabel() { emit('open-label') }
+async function openMeeting(id) {
+  await store.selectMeeting(id)
+  emit('open-meeting')
+}
+
+function meetingStatus(meeting) {
+  return meeting.id === store.activeMeetingId.value ? '当前会议' : (meeting.date || '未设置日期')
+}
 </script>
 
 <template>
   <aside class="sidebar">
     <div class="sidebar-logo">
-      <SvgIcon name="clipboard" :size="20" class="logo-icon" />
+      <span class="logo-mark"><SvgIcon name="clipboard" :size="18" /></span>
       <span class="logo-text">会议纪要</span>
     </div>
 
     <button class="new-meeting-btn" @click="newMeeting">
-      <span>＋</span> 新建纪要
+      <span>＋</span> 新建会议
     </button>
 
     <nav class="sidebar-nav">
-      <button
-        v-for="item in navItems"
-        :key="item.key"
-        class="nav-item active"
-        @click="emit('open-archive')"
-      >
-        <SvgIcon :name="item.icon" :size="18" class="nav-icon" />
-        <span class="nav-label">{{ item.label }}</span>
-        <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
+      <button class="nav-item" :class="{ active: isArchive }" @click="emit('open-archive')">
+        <span class="nav-icon-box"><SvgIcon name="calendar" :size="18" /></span>
+        <span class="nav-copy"><strong>会议中心</strong><small>查找和管理全部会议</small></span>
+        <span class="nav-badge">{{ store.meetings.value.length }}</span>
       </button>
     </nav>
 
-    <div class="sidebar-section">
-      <div class="section-label">
-        <span class="section-label-left"><SvgIcon name="tag" :size="14" /> 标签</span>
-        <button class="section-action" @click="addLabel">管理</button>
-      </div>
-      <div class="tag-list">
-        <button v-for="l in store.labels.value" :key="l.id" class="tag-item">
-          <span class="tag-dot" :style="{ background: l.color || tagColor(l.name) }"></span>
-          {{ l.name }}
-        </button>
-        <div v-if="store.labels.value.length === 0" class="empty-hint" @click="addLabel">
-          点击添加标签
-        </div>
-      </div>
+    <div v-if="activeMeeting" class="sidebar-section current-section">
+      <div class="section-label"><span>当前会议</span><span class="live-indicator"><i></i>工作区</span></div>
+      <button class="current-meeting" :class="{ active: !isArchive }" @click="emit('open-meeting')">
+        <span class="current-icon"><SvgIcon name="file-text" :size="17" /></span>
+        <span class="current-info">
+          <strong>{{ activeMeeting.title || '未命名会议' }}</strong>
+          <small>{{ activeMeeting.date || '未设置日期' }} · {{ activeMeeting.entryCount || 0 }} 条记录</small>
+        </span>
+        <span class="current-arrow">›</span>
+      </button>
     </div>
 
-    <div class="sidebar-section">
+    <div class="sidebar-section recent-section">
       <div class="section-label">
-        <span class="section-label-left"><SvgIcon name="users" :size="14" /> 参会人员</span>
-        <button class="section-action" @click="emit('open-personnel')">管理</button>
+        <span>最近会议</span>
+        <button v-if="store.meetings.value.length" class="section-action" @click="emit('open-archive')">查看全部</button>
       </div>
-      <div class="personnel-mini-list">
-        <div v-for="p in store.persons.value.slice(0, 6)" :key="p.id" class="personnel-mini">
-          <div class="avatar mini-avatar" :style="{ background: p.color }">{{ p.name.charAt(0) }}</div>
-          <span class="personnel-mini-name">{{ p.name }}</span>
-        </div>
-        <div v-if="store.persons.value.length === 0" class="empty-hint" @click="emit('open-personnel')">
-          点击添加人员
-        </div>
+      <div class="recent-list">
+        <button v-for="(meeting, index) in recentMeetings" :key="meeting.id" class="recent-item" :class="{ active: meeting.id === store.activeMeetingId.value }" @click="openMeeting(meeting.id)">
+          <span class="meeting-dot" :style="{ background: TAG_COLORS[index % TAG_COLORS.length] }"></span>
+          <span class="recent-info"><strong>{{ meeting.title || '未命名会议' }}</strong><small>{{ meetingStatus(meeting) }}</small></span>
+        </button>
+        <div v-if="!recentMeetings.length" class="empty-hint">其他会议会显示在这里</div>
       </div>
     </div>
 
@@ -114,13 +105,14 @@ function addLabel() { emit('open-label') }
   overflow-y: auto;
   color: var(--sidebar-text-main);
 }
-.sidebar-logo { display: flex; align-items: center; gap: 8px; padding: 16px 18px; flex-shrink: 0; }
+.sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 22px 22px 18px; flex-shrink: 0; }
+.logo-mark { width: 30px; height: 30px; display: grid; place-items: center; color: #fff; border-radius: 10px; background: linear-gradient(145deg,#4b8aff,#2258eb); box-shadow: 0 6px 18px rgba(37,100,240,.35); }
 .logo-icon { color: #fff; }
-.logo-text { font-size: .95rem; font-weight: 700; color: #fff; }
+.logo-text { font-size: 1.05rem; font-weight: 750; color: #fff; letter-spacing: .04em; }
 
 .new-meeting-btn {
-  margin: 4px 14px 12px;
-  padding: 8px 14px;
+  margin: 2px 20px 20px;
+  padding: 11px 14px;
   border-radius: var(--radius-sm);
   background: var(--primary);
   color: #fff;
@@ -134,12 +126,12 @@ function addLabel() { emit('open-label') }
 }
 .new-meeting-btn:hover { background: var(--primary-hover); }
 
-.sidebar-nav { padding: 0 8px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-nav { padding: 0 12px 4px; display: flex; flex-direction: column; gap: 4px; }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 11px 10px;
   border-radius: var(--radius-sm);
   font-size: .85rem;
   color: var(--sidebar-text);
@@ -147,7 +139,11 @@ function addLabel() { emit('open-label') }
   text-align: left;
 }
 .nav-item:hover { background: var(--sidebar-hover); color: #fff; }
-.nav-item.active { background: var(--sidebar-active); color: #fff; font-weight: 500; }
+.nav-item.active { background: var(--sidebar-active); color: #fff; box-shadow: inset 2px 0 #4f8cff; }
+.nav-icon-box { width: 28px; height: 28px; display: grid; place-items: center; color: #b8c9e3; }
+.nav-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.nav-copy strong { font-size: .84rem; font-weight: 600; color: #fff; }
+.nav-copy small { color: #8097ba; font-size: .67rem; font-weight: 400; }
 .nav-icon { color: var(--sidebar-text); flex-shrink: 0; }
 .nav-item.active .nav-icon { color: #fff; }
 .nav-item:hover .nav-icon { color: #fff; }
@@ -159,12 +155,12 @@ function addLabel() { emit('open-label') }
   border-radius: var(--radius-full);
 }
 
-.sidebar-section { padding: 12px 8px 4px; margin-top: 8px; }
+.sidebar-section { padding: 18px 12px 4px; margin-top: 8px; border-top: 1px solid rgba(255,255,255,.06); }
 .section-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px 8px;
+  padding: 0 10px 10px;
   font-size: .75rem;
   color: var(--sidebar-text);
   text-transform: uppercase;
@@ -173,8 +169,27 @@ function addLabel() { emit('open-label') }
 .section-label-left { display: inline-flex; align-items: center; gap: 4px; }
 .section-action { font-size: .72rem; color: var(--primary); opacity: .8; }
 .section-action:hover { opacity: 1; }
+.live-indicator { display: inline-flex; align-items: center; gap: 5px; color: #7394c3; font-size: .65rem; letter-spacing: 0; text-transform: none; }
+.live-indicator i { width: 5px; height: 5px; border-radius: 50%; background: #48cf8b; box-shadow: 0 0 0 3px rgba(72,207,139,.1); }
+.current-meeting { width: 100%; min-height: 64px; display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid rgba(106,155,237,.16); border-radius: 10px; color: #dce8fa; text-align: left; background: rgba(255,255,255,.035); transition: var(--transition); }
+.current-meeting:hover,.current-meeting.active { border-color: rgba(94,146,239,.36); background: linear-gradient(110deg,rgba(42,101,220,.2),rgba(255,255,255,.045)); }
+.current-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; border-radius: 8px; color: #79a4ff; background: rgba(44,102,230,.18); }
+.current-info { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.current-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; color: #fff; }
+.current-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; color: #849abd; font-size: .67rem; }
+.current-arrow { color: #7491bd; font-size: 1.2rem; }
 
-.tag-list { display: flex; flex-direction: column; gap: 2px; }
+.recent-list { display: flex; flex-direction: column; gap: 4px; }
+.recent-item { width: 100%; display: flex; align-items: flex-start; gap: 10px; padding: 10px; border-radius: 9px; text-align: left; color: var(--sidebar-text); }
+.recent-item:hover,.recent-item.active { background: rgba(255,255,255,.07); }
+.recent-item.active { color: #fff; }
+.meeting-dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; flex: none; }
+.recent-info { min-width: 0; display: flex; flex-direction: column; }
+.recent-info strong { max-width: 166px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; font-weight: 600; color: inherit; }
+.recent-info small { margin-top: 2px; font-size: .7rem; color: #8298bb; }
+.recent-item.active small { color: #69a0ff; }
+.view-all { padding: 9px 10px; color: #91a6c7; font-size: .76rem; text-align: left; }
+.view-all:hover { color: #fff; }
 .tag-item {
   display: flex;
   align-items: center;

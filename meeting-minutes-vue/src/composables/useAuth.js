@@ -38,6 +38,24 @@ export async function authRequest(method, path, body, { allowAnonymous = false }
   return data
 }
 
+export async function authFetch(path, options = {}) {
+  let response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}), ...(options.headers || {}) },
+    })
+  } catch {
+    throw new Error('无法连接服务器，请稍后重试')
+  }
+  if (response.status === 401) setSession(null)
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new Error(data?.message || `请求失败（${response.status}）`)
+  }
+  return response
+}
+
 async function restoreSession() {
   if (!auth.token) {
     auth.ready = true

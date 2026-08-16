@@ -11,6 +11,16 @@ import { h } from 'vue'
  * Register globally so no per-component import needed.
  */
 const ICONS = {
+  microphone: [
+    ['path', { d: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z' }],
+    ['path', { d: 'M19 10v2a7 7 0 0 1-14 0v-2' }],
+    ['line', { x1: 12, y1: 19, x2: 12, y2: 22 }],
+    ['line', { x1: 8, y1: 22, x2: 16, y2: 22 }]
+  ],
+  'edit-3': [
+    ['path', { d: 'M12 20h9' }],
+    ['path', { d: 'M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z' }]
+  ],
   home: [
     ['path', { d: 'M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' }],
     ['polyline', { points: '9 22 9 12 15 12 15 22' }]

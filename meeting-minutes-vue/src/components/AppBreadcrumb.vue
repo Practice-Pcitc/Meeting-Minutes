@@ -16,6 +16,6 @@ const emit = defineEmits(['navigate'])
 </template>
 
 <style scoped>
-.breadcrumb { height: 38px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--border-light); color: var(--text-muted); font-size: .78rem; }
+.breadcrumb { height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 5px 24px 0; background: var(--surface); color: var(--text-muted); font-size: .74rem; }
 .separator { color: var(--text-disabled); }.crumb-link { color: var(--text-secondary); transition: var(--transition); }.crumb-link:hover { color: var(--primary); }.crumb-current { color: var(--text); font-weight: 600; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

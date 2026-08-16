@@ -71,16 +71,17 @@ async function toggleTodo(todo) {
 <template>
   <div class="summary-panel" :class="{ fullpage }">
     <div v-if="!fullpage" class="panel-header">
-      <h3><SvgIcon name="sparkles" :size="16" /> 智能摘要</h3>
+      <h3><SvgIcon name="sparkles" :size="16" /> 会议助手</h3>
       <button class="btn-icon" @click="emit('toggle')" title="收起">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
     </div>
 
     <div class="panel-body">
+      <div class="assistant-status"><span><SvgIcon name="sparkles" :size="15" /> AI 正在整理</span><i></i></div>
       <!-- 会议概览 -->
       <div class="summary-section">
-        <div class="section-title"><SvgIcon name="clipboard" :size="14" /> 会议概览</div>
+        <div class="section-title"><SvgIcon name="clipboard" :size="14" /> 实时摘要</div>
         <div class="overview-stats">
           <div class="stat-item">
             <div class="stat-value">{{ store.entries.value.length }}</div>
@@ -154,7 +155,7 @@ async function toggleTodo(todo) {
 
 <style scoped>
 .summary-panel {
-  width: 320px;
+  width: 340px;
   flex-shrink: 0;
   background: var(--surface);
   border-left: 1px solid var(--border);
@@ -182,9 +183,12 @@ async function toggleTodo(todo) {
 }
 .panel-header h3 { font-size: .95rem; font-weight: 700; display: flex; align-items: center; gap: 6px; }
 
-.panel-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 20px; }
+.panel-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #fbfcff; }
+.assistant-status { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border: 1px solid #dbe5fb; border-radius: 9px; background: #f7f9ff; color: var(--primary); font-size: .82rem; font-weight: 650; }
+.assistant-status span { display: flex; align-items: center; gap: 7px; }
+.assistant-status i { width: 7px; height: 7px; border-radius: 50%; background: #65c31d; box-shadow: 0 0 0 3px #eff9e7; }
 
-.summary-section { display: flex; flex-direction: column; gap: 10px; }
+.summary-section { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }
 .section-title {
   display: flex;
   align-items: center;
@@ -192,8 +196,7 @@ async function toggleTodo(todo) {
   font-size: .82rem;
   font-weight: 700;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: .3px;
+  letter-spacing: .1px;
 }
 .section-title .badge { margin-left: auto; text-transform: none; }
 
@@ -215,8 +218,8 @@ async function toggleTodo(todo) {
   font-size: .85rem;
   line-height: 1.7;
   color: var(--text);
-  background: var(--primary-light);
-  padding: 12px 14px;
+  background: #f7f9ff;
+  padding: 11px 12px;
   border-radius: var(--radius-sm);
   border-left: 3px solid var(--primary);
 }

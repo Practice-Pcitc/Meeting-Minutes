@@ -1,20 +1,38 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import DateTimePicker from './DateTimePicker.vue'
 
-const props = defineProps({ hasPersons: Boolean, onCreate: { type: Function, required: true } })
+const props = defineProps({ hasPersons: Boolean, hasSeats: Boolean, onCreate: { type: Function, required: true } })
 const emit = defineEmits(['close'])
 const submitting = ref(false)
 const now = new Date()
 const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+const currentDate = new Date().toLocaleDateString('en-CA')
+
+function defaultTitle(dateValue, timeValue) {
+  const [year, month, day] = dateValue.split('-').map(Number)
+  const [hour, minute] = timeValue.split(':').map(Number)
+  if (!year || !month || !day || Number.isNaN(hour) || Number.isNaN(minute)) return '新会议'
+  const period = hour < 12 ? '上午' : '下午'
+  return `${year}年${month}月${day}号 ${period}(${hour}:${String(minute).padStart(2, '0')})`
+}
+
+const titleTouched = ref(false)
 const form = reactive({
-  title: '',
-  date: new Date().toLocaleDateString('en-CA'),
+  title: defaultTitle(currentDate, currentTime),
+  date: currentDate,
   startTime: currentTime,
   endTime: '',
   location: '',
   copyPersons: false,
+  copySeats: false,
 })
+
+watch(() => [form.date, form.startTime], () => {
+  if (!titleTouched.value) form.title = defaultTitle(form.date, form.startTime)
+})
+watch(() => form.copySeats, value => { if (value) form.copyPersons = true })
+watch(() => form.copyPersons, value => { if (!value) form.copySeats = false })
 
 async function submit() {
   if (!form.title.trim() || submitting.value) return
@@ -29,7 +47,7 @@ async function submit() {
     <form class="modal" @submit.prevent="submit">
       <div class="modal-header"><h3><SvgIcon name="file-text" :size="18" /> 新建会议纪要</h3><button type="button" class="btn-icon" aria-label="关闭" @click="emit('close')">✕</button></div>
       <div class="modal-body">
-        <div class="form-row"><label>会议标题</label><input v-model="form.title" class="input" placeholder="例如：产品周会" maxlength="80" autofocus /></div>
+        <div class="form-row"><label>会议标题</label><input :value="form.title" class="input" placeholder="例如：产品周会" maxlength="80" autofocus @input="form.title = $event.target.value; titleTouched = true" /></div>
         <div class="form-row"><label>日期</label><DateTimePicker v-model="form.date" /></div>
         <div class="form-row-inline">
           <div class="form-row"><label>开始时间</label><DateTimePicker v-model="form.startTime" mode="time" /></div>
@@ -37,6 +55,7 @@ async function submit() {
         </div>
         <div class="form-row"><label>地点（可选）</label><input v-model="form.location" class="input" placeholder="会议室或线上会议" maxlength="80" /></div>
         <label v-if="hasPersons" class="copy-option"><input v-model="form.copyPersons" type="checkbox" /><span><strong>沿用当前参会人员</strong><small>复制人员姓名、角色和颜色，不复制会议记录</small></span></label>
+        <label v-if="hasSeats" class="copy-option"><input v-model="form.copySeats" type="checkbox" /><span><strong>沿用当前座位安排</strong><small>同时复制参会人员，并保持现有座位位置</small></span></label>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-ghost" @click="emit('close')">取消</button><button type="submit" class="btn btn-primary" :disabled="!form.title.trim() || submitting">{{ submitting ? '创建中…' : '创建并进入' }}</button></div>
     </form>

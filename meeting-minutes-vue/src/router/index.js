@@ -1,14 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+const RouteOutlet = { render: () => null }
+
 const routes = [
   { path: '/', redirect: '/archive' },
-  { path: '/login', name: 'login', meta: { public: true } },
-  { path: '/minutes', name: 'minutes', meta: { tab: 'minutes' } },
-  { path: '/summary', name: 'summary', meta: { tab: 'summary' } },
-  { path: '/todos', name: 'todos', meta: { tab: 'todos' } },
-  { path: '/seating', name: 'seating', meta: { tab: 'seating' } },
-  { path: '/settings', name: 'settings', meta: { tab: 'settings' } },
-  { path: '/archive', name: 'archive', meta: { tab: 'archive' } },
+  { path: '/login', name: 'login', component: RouteOutlet, meta: { public: true } },
+  { path: '/minutes', name: 'minutes', component: RouteOutlet, meta: { tab: 'minutes' } },
+  { path: '/recording', name: 'recording', component: RouteOutlet, meta: { tab: 'recording' } },
+  { path: '/summary', name: 'summary', component: RouteOutlet, meta: { tab: 'summary' } },
+  { path: '/todos', name: 'todos', component: RouteOutlet, meta: { tab: 'todos' } },
+  { path: '/seating', name: 'seating', component: RouteOutlet, meta: { tab: 'seating' } },
+  { path: '/settings', name: 'settings', component: RouteOutlet, meta: { tab: 'settings' } },
+  { path: '/archive', name: 'archive', component: RouteOutlet, meta: { tab: 'archive' } },
   {
     path: '/:pathMatch(.*)*',
     redirect: (to) => {

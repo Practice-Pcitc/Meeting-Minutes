@@ -213,15 +213,25 @@ export class StateService implements OnModuleInit {
       }));
   }
 
-  createMeeting(input: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean } = {}): StatePayload {
+  createMeeting(input: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean } = {}): StatePayload {
     const previous = this.state;
     const id = uuid();
     const document = emptyMeetingDocument(id, input.title || '');
     for (const key of ['date', 'startTime', 'endTime', 'location'] as const) {
       if (typeof input[key] === 'string') document.meeting[key] = input[key]!.trim();
     }
-    if (input.copyPersons) {
-      document.persons = previous.persons.map((person) => ({ ...person, id: uuid() }));
+    if (input.copyPersons || input.copySeats) {
+      const personIdMap = new Map<string, string>();
+      document.persons = previous.persons.map((person) => {
+        const id = uuid();
+        personIdMap.set(person.id, id);
+        return { ...person, id };
+      });
+      if (input.copySeats) {
+        document.seats = previous.seats
+          .filter((seat) => personIdMap.has(seat.personId))
+          .map((seat) => ({ ...seat, personId: personIdMap.get(seat.personId)! }));
+      }
     }
     this.workspace.meetings.push(document);
     this.workspace.activeMeetingId = id;

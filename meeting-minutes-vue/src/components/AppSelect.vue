@@ -12,6 +12,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue'])
 const trigger = ref(null)
 const input = ref(null)
+const popover = ref(null)
 const open = ref(false)
 const query = ref('')
 const position = ref({ top: '0px', left: '0px', width: '220px' })
@@ -31,6 +32,8 @@ async function show() {
   query.value = displayText.value
   await nextTick()
   updatePosition()
+  await nextTick()
+  updatePosition()
   input.value?.select()
   window.addEventListener('resize', updatePosition)
   window.addEventListener('scroll', updatePosition, true)
@@ -46,8 +49,11 @@ function updatePosition() {
   if (!rect) return
   const width = Math.max(rect.width, 220)
   const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))
-  const estimatedHeight = Math.min(300, 48 + Math.max(filtered.value.length, 1) * 42)
-  const top = window.innerHeight - rect.bottom >= estimatedHeight || rect.top < estimatedHeight ? rect.bottom + 7 : rect.top - estimatedHeight - 7
+  const menuHeight = popover.value?.offsetHeight || Math.min(300, 16 + Math.max(filtered.value.length, 1) * 42)
+  const spaceBelow = window.innerHeight - rect.bottom
+  const top = spaceBelow >= menuHeight + 7 || rect.top < menuHeight + 7
+    ? rect.bottom + 7
+    : rect.top - menuHeight - 7
   position.value = { left: `${left}px`, top: `${Math.max(12, top)}px`, width: `${width}px` }
 }
 function choose(value) { emit('update:modelValue', value); close() }
@@ -57,6 +63,7 @@ function handleEnter() {
 }
 function clear(event) { event.stopPropagation(); emit('update:modelValue', ''); query.value = ''; close() }
 onBeforeUnmount(close)
+watch(filtered, async () => { if (open.value) { await nextTick(); updatePosition() } })
 </script>
 
 <template>
@@ -67,7 +74,7 @@ onBeforeUnmount(close)
   </div>
   <Teleport to="body">
     <div v-if="open" class="select-dismiss" @click="close"></div>
-    <div v-if="open" class="select-popover" :style="position">
+    <div v-if="open" ref="popover" class="select-popover" :style="position">
       <button v-for="option in filtered" :key="option.value" type="button" class="select-option" :class="{ selected: option.value === modelValue }" @click="choose(option.value)">
         <span><strong>{{ option.label }}</strong><small v-if="option.description">{{ option.description }}</small></span><span v-if="option.value === modelValue" class="option-check">✓</span>
       </button>

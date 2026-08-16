@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useStore } from '../composables/useStore'
-import EntryEditModal from './EntryEditModal.vue'
+import EntryEditModal from '../components/EntryEditModal.vue'
 
 const store = useStore()
 const editingEntry = ref(null)
