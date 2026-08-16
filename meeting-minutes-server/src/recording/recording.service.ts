@@ -5,6 +5,26 @@ import { v4 as uuid } from 'uuid';
 import { getCurrentUserId } from '../auth/request-context';
 import { AuthService } from '../auth/auth.service';
 
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+  timingSource: 'estimated' | 'asr';
+  speakerClusterId?: string;
+}
+
+export interface SpeakerAssignment {
+  id: string;
+  targetType: 'segment' | 'cluster';
+  targetId: string;
+  personId: string;
+  source: 'manual-anchor' | 'diarization' | 'user-confirmed';
+  confidence?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface RecordingInfo {
   id: string;
   meetingId: string;
@@ -16,6 +36,8 @@ export interface RecordingInfo {
   completed: boolean;
   duration?: number;
   transcript?: string;
+  transcriptSegments?: TranscriptSegment[];
+  speakerAssignments?: SpeakerAssignment[];
   transcribedAt?: number;
 }
 
@@ -37,8 +59,67 @@ export class RecordingService {
   private metadataPath(meetingId: string, id: string) {
     return path.join(this.directory(meetingId), `${this.safe(id, '录音 ID')}.json`);
   }
+  private splitTranscript(text: string) {
+    const normalized = String(text || '').trim();
+    if (!normalized) return [];
+    return (normalized.match(/[^。！？!?；;，,\n]+(?:[。！？!?；;，,]+|$)/g) || [normalized])
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+  private estimatedSegments(info: Pick<RecordingInfo, 'id' | 'duration'>, text: string): TranscriptSegment[] {
+    const sentences = this.splitTranscript(text);
+    const totalUnits = Math.max(1, sentences.reduce((sum, sentence) => sum + sentence.length, 0));
+    const durationMs = Math.max(0, Number(info.duration) || 0) * 1000;
+    let consumedUnits = 0;
+    return sentences.map((sentence, index) => {
+      const startMs = Math.round(durationMs * consumedUnits / totalUnits);
+      consumedUnits += sentence.length;
+      return {
+        id: `${info.id}:estimated:${index}`,
+        text: sentence,
+        startMs,
+        endMs: Math.round(durationMs * consumedUnits / totalUnits),
+        timingSource: 'estimated',
+      };
+    });
+  }
+  private resultSegments(info: RecordingInfo, text: string, result?: any): TranscriptSegment[] {
+    const sentenceInfo = Array.isArray(result?.sentence_info) ? result.sentence_info : [];
+    const fromFunAsr = sentenceInfo
+      .map((segment: any, index: number) => ({
+        id: `${info.id}:asr:${index}`,
+        text: String(segment?.text || '').trim(),
+        startMs: Math.max(0, Math.round(Number(segment?.start) || 0)),
+        endMs: Math.max(0, Math.round(Number(segment?.end) || 0)),
+        timingSource: 'asr' as const,
+        ...(segment?.spk !== undefined && segment?.spk !== null ? { speakerClusterId: String(segment.spk) } : {}),
+      }))
+      .filter((segment: TranscriptSegment) => segment.text && segment.endMs >= segment.startMs);
+    if (fromFunAsr.length) return fromFunAsr;
+
+    const verboseSegments = Array.isArray(result?.segments) ? result.segments : [];
+    const fromVerboseResult = verboseSegments
+      .map((segment: any, index: number) => ({
+        id: `${info.id}:asr:${index}`,
+        text: String(segment?.text || '').trim(),
+        startMs: Math.max(0, Math.round((Number(segment?.start) || 0) * 1000)),
+        endMs: Math.max(0, Math.round((Number(segment?.end) || 0) * 1000)),
+        timingSource: 'asr' as const,
+        ...(segment?.speaker !== undefined && segment?.speaker !== null ? { speakerClusterId: String(segment.speaker) } : {}),
+      }))
+      .filter((segment: TranscriptSegment) => segment.text && segment.endMs >= segment.startMs);
+    return fromVerboseResult.length ? fromVerboseResult : this.estimatedSegments(info, text);
+  }
+  private normalizeInfo(raw: RecordingInfo): RecordingInfo {
+    const info = { ...raw };
+    info.speakerAssignments = Array.isArray(info.speakerAssignments) ? info.speakerAssignments : [];
+    if ((!Array.isArray(info.transcriptSegments) || !info.transcriptSegments.length) && info.transcript) {
+      info.transcriptSegments = this.estimatedSegments(info, info.transcript);
+    }
+    return info;
+  }
   private async readInfo(meetingId: string, id: string): Promise<RecordingInfo> {
-    try { return JSON.parse(await fs.readFile(this.metadataPath(meetingId, id), 'utf8')); }
+    try { return this.normalizeInfo(JSON.parse(await fs.readFile(this.metadataPath(meetingId, id), 'utf8'))); }
     catch { throw new NotFoundException('录音不存在'); }
   }
 
@@ -48,7 +129,7 @@ export class RecordingService {
     const dir = this.directory(meetingId);
     await fs.mkdir(dir, { recursive: true });
     const now = Date.now();
-    const info: RecordingInfo = { id, meetingId, mimeType, extension, size: 0, createdAt: now, updatedAt: now, completed: false };
+    const info: RecordingInfo = { id, meetingId, mimeType, extension, size: 0, createdAt: now, updatedAt: now, completed: false, transcriptSegments: [], speakerAssignments: [] };
     await fs.writeFile(path.join(dir, `${id}.${extension}.part`), Buffer.alloc(0));
     await fs.writeFile(this.metadataPath(meetingId, id), JSON.stringify(info, null, 2));
     return info;
@@ -83,6 +164,7 @@ export class RecordingService {
       const transcript = String(transcriptInput || '').trim();
       if (transcript) {
         info.transcript = transcript;
+        info.transcriptSegments = this.resultSegments(info, transcript);
         info.transcribedAt = Date.now();
       }
       info.updatedAt = Date.now();
@@ -96,7 +178,7 @@ export class RecordingService {
     try {
       const files = (await fs.readdir(dir)).filter(name => name.endsWith('.json'));
       const infos = await Promise.all(files.map(name => fs.readFile(path.join(dir, name), 'utf8').then(JSON.parse)));
-      return (infos as RecordingInfo[]).filter(item => item.completed).sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
+      return (infos as RecordingInfo[]).map(info => this.normalizeInfo(info)).filter(item => item.completed).sort((a, b) => b.updatedAt - a.updatedAt)[0] || null;
     } catch { return null; }
   }
 
@@ -105,7 +187,7 @@ export class RecordingService {
     try {
       const files = (await fs.readdir(dir)).filter(name => name.endsWith('.json'));
       const infos = await Promise.all(files.map(name => fs.readFile(path.join(dir, name), 'utf8').then(JSON.parse)));
-      return (infos as RecordingInfo[])
+      return (infos as RecordingInfo[]).map(info => this.normalizeInfo(info))
         .filter(item => item.completed)
         .sort((a, b) => a.createdAt - b.createdAt);
     } catch { return []; }
@@ -150,7 +232,9 @@ export class RecordingService {
     const result: any = await response.json().catch(() => null);
     if (!response.ok) throw new ServiceUnavailableException(result?.error?.message || result?.message || `语音转写失败（${response.status}）`);
     info.transcript = String(result?.text || '').trim();
+    info.transcriptSegments = this.resultSegments(info, info.transcript, result);
     info.transcribedAt = Date.now();
+    info.updatedAt = Date.now();
     await fs.writeFile(this.metadataPath(meetingId, id), JSON.stringify(info, null, 2));
     return info;
   }

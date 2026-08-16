@@ -78,23 +78,37 @@ function splitTranscript(value) {
   return (text.match(/[^。！？!?；;，,\n]+(?:[。！？!?；;，,]+|$)/g) || [text]).map(part => part.trim()).filter(Boolean)
 }
 const mergedTranscriptSegments = computed(() => sorted.value.flatMap((item, itemIndex) => {
-  const sentences = splitTranscript(item.transcript)
-  const totalUnits = Math.max(1, sentences.reduce((sum, sentence) => sum + sentence.length, 0))
-  const duration = itemDuration(item)
-  let consumedUnits = 0
-  return sentences.map((text, sentenceIndex) => {
-    const offset = duration * consumedUnits / totalUnits
-    consumedUnits += text.length
-    return {
-      id: `${item.id}-${sentenceIndex}`,
-      item,
-      itemIndex,
-      sentenceIndex,
-      text,
-      offset,
-      endOffset: duration * consumedUnits / totalUnits,
-      timestamp: item.createdAt + offset * 1000,
-    }
+  const baseSegments = Array.isArray(item.transcriptSegments) && item.transcriptSegments.length
+    ? item.transcriptSegments
+    : [{ id: `${item.id}:legacy`, text: item.transcript, startMs: 0, endMs: itemDuration(item) * 1000, timingSource: 'estimated' }]
+  let displayIndex = 0
+  return baseSegments.flatMap(baseSegment => {
+    const sentences = splitTranscript(baseSegment.text)
+    const totalUnits = Math.max(1, sentences.reduce((sum, sentence) => sum + sentence.length, 0))
+    const baseStartMs = Math.max(0, Number(baseSegment.startMs) || 0)
+    const baseEndMs = Math.max(baseStartMs, Number(baseSegment.endMs) || baseStartMs)
+    let consumedUnits = 0
+    return sentences.map((text, partIndex) => {
+      const startMs = baseStartMs + (baseEndMs - baseStartMs) * consumedUnits / totalUnits
+      consumedUnits += text.length
+      const endMs = baseStartMs + (baseEndMs - baseStartMs) * consumedUnits / totalUnits
+      const sentenceIndex = displayIndex
+      displayIndex += 1
+      return {
+        id: `${baseSegment.id || `${item.id}:segment`}:${partIndex}`,
+        baseSegmentId: baseSegment.id || `${item.id}:segment`,
+        item,
+        itemIndex,
+        sentenceIndex,
+        text,
+        offset: startMs / 1000,
+        endOffset: endMs / 1000,
+        timestamp: item.createdAt + startMs,
+        endTimestamp: item.createdAt + endMs,
+        timingSource: baseSegment.timingSource || 'estimated',
+        speakerClusterId: baseSegment.speakerClusterId,
+      }
+    })
   })
 }))
 const playbackSegmentId = computed(() => {
@@ -113,22 +127,52 @@ const playbackEntryId = computed(() => {
   return nearest && nearest.distance <= 8000 ? nearest.id : ''
 })
 const highlightedEntryId = computed(() => hoveredEntryId.value || selectedEntryId.value || playbackEntryId.value)
+const manualSegmentAnchors = computed(() => {
+  const matches = new Map()
+  const candidates = mergedTranscriptSegments.value
+  for (const entry of manualEntries.value) {
+    if (!entry.speakerId || !store.getPerson(entry.speakerId)) continue
+    let best = null
+    for (const segment of candidates) {
+      const recordingStart = segment.item.createdAt - 30000
+      const recordingEnd = itemEnd(segment.item) + 30000
+      if (entry.timestamp < recordingStart || entry.timestamp > recordingEnd) continue
+      const distance = entry.timestamp < segment.timestamp
+        ? segment.timestamp - entry.timestamp
+        : entry.timestamp > segment.endTimestamp ? entry.timestamp - segment.endTimestamp : 0
+      if (distance <= 30000 && (!best || distance < best.distance)) best = { segment, distance }
+    }
+    if (!best) continue
+    const existing = matches.get(best.segment.id)
+    if (!existing || best.distance < existing.distance) {
+      matches.set(best.segment.id, { entry, person: store.getPerson(entry.speakerId), distance: best.distance })
+    }
+  }
+  return matches
+})
+function storedSpeakerPerson(segment) {
+  const priorities = { diarization: 1, 'manual-anchor': 2, 'user-confirmed': 3 }
+  const assignments = Array.isArray(segment.item.speakerAssignments) ? segment.item.speakerAssignments : []
+  const match = assignments
+    .filter(assignment => (assignment.targetType === 'segment' && assignment.targetId === segment.baseSegmentId)
+      || (assignment.targetType === 'cluster' && segment.speakerClusterId != null && assignment.targetId === String(segment.speakerClusterId)))
+    .sort((a, b) => (priorities[b.source] || 0) - (priorities[a.source] || 0))[0]
+  const person = match?.personId ? store.getPerson(match.personId) : null
+  return person ? { person, assignment: match } : null
+}
 const mergedDisplaySegments = computed(() => {
-  let previousSpeakerKey = ''
   return mergedTranscriptSegments.value.map(segment => {
-    const speakerEntry = manualEntries.value
-      .filter(entry => entry.speakerId && entry.timestamp >= segment.item.createdAt && entry.timestamp <= segment.timestamp)
-      .at(-1)
-    const person = speakerEntry ? store.getPerson(speakerEntry.speakerId) : null
-    const speakerKey = person?.id || `recording:${segment.item.id}`
-    const showAvatar = segment.sentenceIndex === 0 || speakerKey !== previousSpeakerKey
-    previousSpeakerKey = speakerKey
+    const anchor = manualSegmentAnchors.value.get(segment.id)
+    const stored = storedSpeakerPerson(segment)
+    const preferStored = stored?.assignment?.source === 'user-confirmed'
+    const person = preferStored ? stored.person : (anchor?.person || stored?.person || null)
+    const source = preferStored || (!anchor && stored) ? stored?.assignment?.source : (anchor ? 'manual-anchor' : '')
     return {
       ...segment,
       person,
-      showAvatar,
-      avatarText: person?.name?.charAt(0) || '录',
-      avatarTitle: person?.name || '未关联发言人',
+      showAvatar: Boolean(person),
+      avatarText: person?.name?.charAt(0) || '',
+      avatarTitle: person ? `${source === 'user-confirmed' ? '已确认发言人' : source === 'diarization' ? '声纹识别关联' : '手动记录关联'} · ${person.name}` : '',
       avatarColor: person?.color || '#6f7f99',
     }
   })
