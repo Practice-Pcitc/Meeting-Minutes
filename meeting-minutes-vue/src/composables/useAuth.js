@@ -95,6 +95,26 @@ async function updatePreferences(preferences) {
   return auth.user
 }
 
+async function createAiProvider(provider) {
+  auth.user = await authRequest('POST', '/auth/ai-providers', provider)
+  return auth.user
+}
+
+async function updateAiProvider(id, provider) {
+  auth.user = await authRequest('PATCH', `/auth/ai-providers/${id}`, provider)
+  return auth.user
+}
+
+async function deleteAiProvider(id) {
+  auth.user = await authRequest('DELETE', `/auth/ai-providers/${id}`)
+  return auth.user
+}
+
+async function setDefaultAiProvider(id) {
+  auth.user = await authRequest('POST', `/auth/ai-providers/${id}/default`)
+  return auth.user
+}
+
 restoreSession()
 
 export function useAuth() {
@@ -105,5 +125,9 @@ export function useAuth() {
     register,
     logout,
     updatePreferences,
+    createAiProvider,
+    updateAiProvider,
+    deleteAiProvider,
+    setDefaultAiProvider,
   }
 }

@@ -10,6 +10,21 @@ export interface Meeting {
   endTime: string; // HH:mm
   location: string;
   status: 'active' | 'ended';
+  aiSummary?: AiMeetingSummary;
+}
+
+export interface AiMeetingSummary {
+  summary: string;
+  keyPoints: string[];
+  decisions: string[];
+  risks: string[];
+  nextSteps: string[];
+  provider: {
+    id: string;
+    name: string;
+    model: string;
+  };
+  generatedAt: number;
 }
 
 export interface Person {

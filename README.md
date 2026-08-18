@@ -16,6 +16,8 @@
 - 真实麦克风音量波形与录音输入源选择
 - 本地 FunASR ONNX 流式转写、停顿分句和长录音 VAD 分段转写
 - 用户级默认语音引擎设置，支持本地 FunASR 与 OpenAI
+- 用户级 AI 供应商管理，支持 OpenAI、DeepSeek、阿里云百炼及其他 OpenAI 兼容接口
+- 手动生成结构化 AI 总结，并将摘要、要点、决策、风险和下一步保存到对应会议
 
 ## 技术栈
 
@@ -117,7 +119,7 @@ sh ./scripts/stop-funasr-onnx.sh
 uv sync --project tools --locked
 ```
 
-首次启动会由 uv 安装兼容的 Python 3.11 或 3.12，并从 ModelScope 下载 Paraformer 中文识别、中文标点和 FSMN-VAD 模型。Python 依赖与模型均会在后续启动时复用。
+首次启动会由 uv 安装兼容的 Python 3.11 或 3.12，并从 ModelScope 下载 Paraformer 中文识别和 FSMN-VAD 模型。Python 依赖与模型均会在后续启动时复用；标点模型为可选项，可通过 `FUNASR_PUNC_MODEL` 配置。
 
 健康检查地址：`http://127.0.0.1:10095/health`。
 
@@ -128,6 +130,12 @@ http://127.0.0.1:10095/v1/audio/transcriptions
 ```
 
 录音时，前端通过 AudioWorklet 采集 PCM 并使用 WebSocket 实时显示当前句。停顿后句子会被确认并固定；连续讲话会按上限自动切段。结束录音时优先保存实时确认文本，不会自动用长文件结果覆盖。用户主动重新转写完整录音时，服务会先通过 FSMN-VAD 检测发言区间，再分段识别并按时间顺序合并。
+
+## AI 总结
+
+登录后点击左下角用户头像，进入“AI 供应商管理”，添加 OpenAI 兼容供应商并设为默认。系统内置 OpenAI、DeepSeek 和阿里云百炼模板，也支持自定义 Base URL 与模型名称。
+
+API Key 只保存在后端的 `data/auth.json`，前端只能看到“密钥已配置”状态。进入会议的“AI 总结”页后手动点击生成，系统会使用当前账号的默认供应商，并将生成结果保存到该会议；系统不会自动调用付费接口。
 
 ## 生产构建
 

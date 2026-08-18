@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import {
-  AppState, emptyState, emptyMeetingDocument, Meeting, MeetingDocument, MeetingSummary,
+  AiMeetingSummary, AppState, emptyState, emptyMeetingDocument, Meeting, MeetingDocument, MeetingSummary,
   Person, Entry, TopicTag, Todo, Label, StatePayload, WorkspaceState,
 } from './types';
 import { getCurrentUserId } from '../auth/request-context';
@@ -184,6 +184,20 @@ export class StateService implements OnModuleInit {
       activeMeetingId: this.workspace.activeMeetingId,
       meetings: this.listMeetings(),
     }));
+  }
+
+  getMeetingDocument(id: string): MeetingDocument | null {
+    const document = this.workspace.meetings.find((item) => item.meeting.id === id);
+    return document ? JSON.parse(JSON.stringify(document)) : null;
+  }
+
+  saveAiSummary(id: string, summary: AiMeetingSummary): AiMeetingSummary {
+    const document = this.workspace.meetings.find((item) => item.meeting.id === id);
+    if (!document) throw new BadRequestException('会议不存在');
+    document.meeting.aiSummary = summary;
+    document.updatedAt = Date.now();
+    this.persist();
+    return JSON.parse(JSON.stringify(summary));
   }
 
   reset(): StatePayload {

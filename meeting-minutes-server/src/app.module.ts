@@ -4,9 +4,10 @@ import { StateModule } from './state/state.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/auth.guard';
 import { RecordingModule } from './recording/recording.module';
+import { SummaryModule } from './summary/summary.module';
 
 @Module({
-  imports: [AuthModule, StateModule, RecordingModule],
+  imports: [AuthModule, StateModule, RecordingModule, SummaryModule],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AppModule {}

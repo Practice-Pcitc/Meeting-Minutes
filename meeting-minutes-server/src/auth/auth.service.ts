@@ -4,7 +4,10 @@ import * as path from 'path';
 import { randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash } from 'crypto';
 import { promisify } from 'util';
 import { v4 as uuid } from 'uuid';
-import { AuthStore, AuthUser, StoredUser, UserPreferences } from './auth.types';
+import {
+  AiProviderPublic, AuthStore, AuthUser, StoredAiProvider, StoredUser,
+  StoredUserPreferences, UserPreferences,
+} from './auth.types';
 
 const scrypt = promisify(scryptCallback);
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
@@ -19,7 +22,10 @@ export class AuthService implements OnModuleInit {
   async onModuleInit() {
     try {
       const raw = JSON.parse(await fs.readFile(this.dataFile, 'utf-8'));
-      this.store.users = Array.isArray(raw?.users) ? raw.users : [];
+      this.store.users = Array.isArray(raw?.users) ? raw.users.map((user: StoredUser) => ({
+        ...user,
+        preferences: this.normalizeStoredPreferences(user.preferences),
+      })) : [];
       this.store.sessions = Array.isArray(raw?.sessions) ? raw.sessions : [];
       this.removeExpiredSessions();
       this.logger.log(`Loaded ${this.store.users.length} users`);
@@ -43,7 +49,7 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('该用户名已被使用');
     }
     const user: StoredUser = {
-      id: uuid(), username, displayName, passwordHash, passwordSalt, createdAt: Date.now(), preferences: this.defaultPreferences(),
+      id: uuid(), username, displayName, passwordHash, passwordSalt, createdAt: Date.now(), preferences: this.defaultStoredPreferences(),
     };
     this.store.users.push(user);
     const token = this.createSession(user.id);
@@ -98,12 +104,74 @@ export class AuthService implements OnModuleInit {
       } catch { throw new BadRequestException('FunASR 服务地址格式不正确'); }
     }
     user.preferences = {
-      ...this.defaultPreferences(), ...(user.preferences || {}),
+      ...this.normalizeStoredPreferences(user.preferences),
       ...(provider !== undefined ? { transcriptionProvider: provider } : {}),
       ...(funasrEndpoint !== undefined ? { funasrEndpoint } : {}),
     };
     await this.persist();
     return this.toPublicUser(user);
+  }
+
+  async createAiProvider(userId: string, input: { name?: string; baseUrl?: string; model?: string; apiKey?: string }) {
+    const user = this.requireUser(userId);
+    const now = Date.now();
+    const provider: StoredAiProvider = {
+      id: uuid(),
+      ...this.validateAiProvider(input),
+      apiKey: String(input.apiKey || '').trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    user.preferences = this.normalizeStoredPreferences(user.preferences);
+    user.preferences.aiProviders.push(provider);
+    if (!user.preferences.defaultAiProviderId) user.preferences.defaultAiProviderId = provider.id;
+    await this.persist();
+    return this.toPublicUser(user);
+  }
+
+  async updateAiProvider(userId: string, id: string, input: { name?: string; baseUrl?: string; model?: string; apiKey?: string }) {
+    const user = this.requireUser(userId);
+    user.preferences = this.normalizeStoredPreferences(user.preferences);
+    const provider = user.preferences.aiProviders.find((item) => item.id === id);
+    if (!provider) throw new BadRequestException('AI 供应商不存在');
+    const validated = this.validateAiProvider({
+      name: input.name ?? provider.name,
+      baseUrl: input.baseUrl ?? provider.baseUrl,
+      model: input.model ?? provider.model,
+    });
+    Object.assign(provider, validated, { updatedAt: Date.now() });
+    if (typeof input.apiKey === 'string' && input.apiKey.trim()) provider.apiKey = input.apiKey.trim();
+    await this.persist();
+    return this.toPublicUser(user);
+  }
+
+  async deleteAiProvider(userId: string, id: string) {
+    const user = this.requireUser(userId);
+    user.preferences = this.normalizeStoredPreferences(user.preferences);
+    const before = user.preferences.aiProviders.length;
+    user.preferences.aiProviders = user.preferences.aiProviders.filter((item) => item.id !== id);
+    if (before === user.preferences.aiProviders.length) throw new BadRequestException('AI 供应商不存在');
+    if (user.preferences.defaultAiProviderId === id) {
+      user.preferences.defaultAiProviderId = user.preferences.aiProviders[0]?.id || '';
+    }
+    await this.persist();
+    return this.toPublicUser(user);
+  }
+
+  async setDefaultAiProvider(userId: string, id: string) {
+    const user = this.requireUser(userId);
+    user.preferences = this.normalizeStoredPreferences(user.preferences);
+    if (!user.preferences.aiProviders.some((item) => item.id === id)) throw new BadRequestException('AI 供应商不存在');
+    user.preferences.defaultAiProviderId = id;
+    await this.persist();
+    return this.toPublicUser(user);
+  }
+
+  getDefaultAiProvider(userId: string): StoredAiProvider | null {
+    const user = this.store.users.find((item) => item.id === userId);
+    if (!user) return null;
+    user.preferences = this.normalizeStoredPreferences(user.preferences);
+    return user.preferences.aiProviders.find((item) => item.id === user.preferences.defaultAiProviderId) || null;
   }
 
   private validateRegistration(username: string, password: string, displayName: string) {
@@ -150,12 +218,70 @@ export class AuthService implements OnModuleInit {
     this.store.sessions = this.store.sessions.filter((item) => item.expiresAt > now);
   }
 
-  private toPublicUser(user: StoredUser): AuthUser {
-    return { id: user.id, username: user.username, displayName: user.displayName, createdAt: user.createdAt, preferences: { ...this.defaultPreferences(), ...(user.preferences || {}) } };
+  private requireUser(userId: string): StoredUser {
+    const user = this.store.users.find((item) => item.id === userId);
+    if (!user) throw new UnauthorizedException('用户不存在或登录已失效');
+    return user;
   }
 
-  private defaultPreferences(): UserPreferences {
-    return { transcriptionProvider: 'funasr', funasrEndpoint: process.env.FUNASR_TRANSCRIBE_ENDPOINT || 'http://127.0.0.1:10095/v1/audio/transcriptions' };
+  private validateAiProvider(input: { name?: string; baseUrl?: string; model?: string }) {
+    const name = String(input.name || '').trim();
+    const model = String(input.model || '').trim();
+    if (!name || name.length > 40) throw new BadRequestException('供应商名称需为 1-40 个字符');
+    if (!model || model.length > 100) throw new BadRequestException('请填写模型名称');
+    let baseUrl = String(input.baseUrl || '').trim().replace(/\/+$/, '');
+    try {
+      const url = new URL(baseUrl);
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) throw new Error();
+      baseUrl = url.toString().replace(/\/+$/, '');
+    } catch { throw new BadRequestException('供应商接口地址格式不正确'); }
+    return { name, baseUrl, model };
+  }
+
+  private toPublicProvider(provider: StoredAiProvider): AiProviderPublic {
+    const { apiKey, ...safe } = provider;
+    return { ...safe, hasApiKey: Boolean(apiKey) };
+  }
+
+  private toPublicUser(user: StoredUser): AuthUser {
+    const preferences = this.normalizeStoredPreferences(user.preferences);
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      createdAt: user.createdAt,
+      preferences: {
+        transcriptionProvider: preferences.transcriptionProvider,
+        funasrEndpoint: preferences.funasrEndpoint,
+        defaultAiProviderId: preferences.defaultAiProviderId,
+        aiProviders: preferences.aiProviders.map((provider) => this.toPublicProvider(provider)),
+      },
+    };
+  }
+
+  private defaultStoredPreferences(): StoredUserPreferences {
+    return {
+      transcriptionProvider: 'funasr',
+      funasrEndpoint: process.env.FUNASR_TRANSCRIBE_ENDPOINT || 'http://127.0.0.1:10095/v1/audio/transcriptions',
+      defaultAiProviderId: '',
+      aiProviders: [],
+    };
+  }
+
+  private normalizeStoredPreferences(input?: Partial<StoredUserPreferences>): StoredUserPreferences {
+    const defaults = this.defaultStoredPreferences();
+    const aiProviders = Array.isArray(input?.aiProviders)
+      ? input.aiProviders.filter((item): item is StoredAiProvider => Boolean(item?.id && item?.name && item?.baseUrl && item?.model))
+      : [];
+    const defaultAiProviderId = aiProviders.some((item) => item.id === input?.defaultAiProviderId)
+      ? String(input?.defaultAiProviderId)
+      : (aiProviders[0]?.id || '');
+    return {
+      transcriptionProvider: input?.transcriptionProvider === 'openai' ? 'openai' : 'funasr',
+      funasrEndpoint: input?.funasrEndpoint || defaults.funasrEndpoint,
+      defaultAiProviderId,
+      aiProviders: aiProviders.map((item) => ({ ...item, apiKey: String(item.apiKey || '') })),
+    };
   }
 
   private async persist() {

@@ -37,6 +37,7 @@ const showPersonnelModal = ref(false)
 const showLabelModal = ref(false)
 const showNewMeetingModal = ref(false)
 const showUserSettingsModal = ref(false)
+const userSettingsSection = ref('providers')
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
 const recordingStatus = ref('idle')
@@ -172,7 +173,7 @@ async function handleLogout() {
 const tabs = [
   { key: 'minutes', label: '手动记录', icon: 'edit-3' },
   { key: 'recording', label: '自动录音', icon: 'microphone' },
-  { key: 'summary', label: '会议纪要', icon: 'sparkles' },
+  { key: 'summary', label: 'AI 总结', icon: 'sparkles' },
   { key: 'todos', label: '待办事项', icon: 'check-square' },
   { key: 'seating', label: '座位图', icon: 'users' },
   { key: 'settings', label: '设置', icon: 'settings' }
@@ -188,7 +189,7 @@ const viewTabs = [
 const pageLabels = {
   minutes: '手动记录',
   recording: '自动录音',
-  summary: '智能摘要',
+  summary: 'AI 总结',
   todos: '待办事项',
   seating: '座位图',
   settings: '设置',
@@ -217,6 +218,10 @@ function switchView(key) {
   router.push({ name: 'minutes', query: key === 'timeline' ? {} : { view: key } })
 }
 function toggleSummary() { showSummaryPanel.value = !showSummaryPanel.value }
+function openUserSettings(section = 'providers') {
+  userSettingsSection.value = section
+  showUserSettingsModal.value = true
+}
 function navigateBreadcrumb(action) { switchTab(action) }
 
 async function handleReset() {
@@ -286,7 +291,7 @@ function setMeeting(patch) {
       @open-archive="switchTab('archive')"
       @open-meeting="switchTab('minutes')"
       @select-meeting="selectMeetingWithGuard"
-      @open-user-settings="showUserSettingsModal = true"
+      @open-user-settings="openUserSettings"
       @logout="handleLogout"
     />
     <div class="app-main">
@@ -365,7 +370,7 @@ function setMeeting(patch) {
 
             <!-- 右侧摘要面板 -->
             <transition name="slide-right">
-              <SummaryPanel v-if="showSummaryPanel" @toggle="toggleSummary" />
+              <SummaryPanel v-if="showSummaryPanel" @toggle="toggleSummary" @open-provider-settings="openUserSettings('providers')" />
             </transition>
           </div>
         </template>
@@ -379,7 +384,7 @@ function setMeeting(patch) {
 
         <!-- 智能摘要 Tab -->
         <div v-else-if="activeTab === 'summary'" class="summary-tab">
-          <SummaryPanel :fullpage="true" @toggle="toggleSummary" />
+          <SummaryPanel :fullpage="true" @toggle="toggleSummary" @open-provider-settings="openUserSettings('providers')" />
         </div>
 
         <!-- 设置 Tab -->
@@ -424,7 +429,7 @@ function setMeeting(patch) {
     <PersonnelModal v-if="showPersonnelModal" @close="showPersonnelModal = false" />
     <LabelModal v-if="showLabelModal" @close="showLabelModal = false" />
     <NewMeetingModal v-if="showNewMeetingModal" :has-persons="Boolean(store.persons.value.length)" :has-seats="Boolean(store.seats.value.length)" :on-create="createMeeting" @close="showNewMeetingModal = false" />
-    <UserSettingsModal v-if="showUserSettingsModal" @close="showUserSettingsModal = false" />
+    <UserSettingsModal v-if="showUserSettingsModal" :initial-section="userSettingsSection" @close="showUserSettingsModal = false" />
     <NotificationCenter />
   </div>
 </template>

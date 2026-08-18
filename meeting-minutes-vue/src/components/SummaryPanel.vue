@@ -1,299 +1,153 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useStore } from '../composables/useStore'
+import { authRequest, useAuth } from '../composables/useAuth'
+import { useNotify } from '../composables/useNotify'
 
-const props = defineProps({
-  fullpage: { type: Boolean, default: false }
-})
-const emit = defineEmits(['toggle'])
+defineProps({ fullpage: { type: Boolean, default: false } })
+const emit = defineEmits(['toggle', 'open-provider-settings'])
 const store = useStore()
+const { auth } = useAuth()
+const notify = useNotify()
+const generating = ref(false)
 
-// 记录按时间排序
-const sortedEntries = computed(() => {
-  return [...store.entries.value].sort((a, b) => a.time.localeCompare(b.time))
+const aiSummary = computed(() => store.meeting.value.aiSummary || null)
+const defaultProvider = computed(() => {
+  const preferences = auth.user?.preferences
+  return (preferences?.aiProviders || []).find(item => item.id === preferences?.defaultAiProviderId) || null
 })
+const keyPoints = computed(() => (aiSummary.value?.keyPoints || []).map((text, index) => ({ id: `point-${index}`, text })))
+const detailSections = computed(() => [
+  { key: 'decisions', title: '明确决策', icon: 'check-circle', items: aiSummary.value?.decisions || [] },
+  { key: 'risks', title: '风险与阻塞', icon: 'lightbulb', items: aiSummary.value?.risks || [] },
+  { key: 'nextSteps', title: '下一步行动', icon: 'chevron-right', items: aiSummary.value?.nextSteps || [] },
+].filter(section => section.items.length))
+const pendingTodos = computed(() => store.todos.value.filter(todo => !todo.done))
+const generatedTime = computed(() => aiSummary.value?.generatedAt
+  ? new Date(aiSummary.value.generatedAt).toLocaleString('zh-CN', { hour12: false })
+  : '')
 
-// 智能摘要 - 完全基于真实数据动态生成，不写死文字
-const summary = computed(() => {
-  const list = sortedEntries.value
-  if (!list.length) return '暂无会议记录，添加记录后将自动生成摘要。'
-
-  const total = list.length
-  const speakers = new Set(list.map(e => e.speakerId).filter(Boolean))
-  const topics = new Set(list.map(e => e.topic).filter(Boolean))
-  const t1 = list[0]?.time?.slice(11, 16) || ''  // HH:mm
-  const t2 = list[list.length - 1]?.time?.slice(11, 16) || ''
-
-  // 找出说话最多的发言人
-  const speakerCount = new Map()
-  list.forEach(e => {
-    if (e.speakerId) speakerCount.set(e.speakerId, (speakerCount.get(e.speakerId) || 0) + 1)
-  })
-  let topSpeaker = null
-  let topCount = 0
-  speakerCount.forEach((c, id) => { if (c > topCount) { topCount = c; topSpeaker = id } })
-
-  const topName = topSpeaker ? store.getPerson(topSpeaker)?.name : null
-
-  const parts = []
-  parts.push(`本次会议共记录 ${total} 条内容`)
-  if (speakers.size) parts.push(`，涉及 ${speakers.size} 位发言人`)
-  if (topics.size) parts.push(`，覆盖 ${topics.size} 个主题`)
-  parts.push('。')
-  if (t1 && t2) parts.push(`发言时段 ${t1} - ${t2}。`)
-  if (topName) parts.push(`其中「${topName}」发言最频繁，共 ${topCount} 次。`)
-
-  return parts.join('')
-})
-
-// 关键要点 - 取前 5 条最早记录
-const keyPoints = computed(() => {
-  return sortedEntries.value.slice(0, 5).map(e => ({
-    id: e.id,
-    text: e.content.length > 60 ? e.content.slice(0, 60) + '…' : e.content,
-    topic: e.topic
-  }))
-})
-
-const pendingTodos = computed(() => store.todos.value.filter(t => !t.done))
+async function generateSummary() {
+  if (!defaultProvider.value) {
+    notify.warning('请先配置并设置默认 AI 供应商')
+    emit('open-provider-settings')
+    return
+  }
+  if (!store.entries.value.length) {
+    notify.warning('当前会议还没有记录，暂时无法生成 AI 总结')
+    return
+  }
+  generating.value = true
+  try {
+    await authRequest('POST', `/meetings/${store.activeMeetingId.value}/ai-summary`, {})
+    await store.refetch()
+    notify.success('AI 总结已生成并保存到当前会议')
+  } catch (error) { notify.error(error.message) }
+  finally { generating.value = false }
+}
 
 function assigneeName(id) {
   if (!id) return ''
-  const p = store.getPerson(id)
-  return p ? p.name : ''
+  return store.getPerson(id)?.name || ''
 }
 
 async function toggleTodo(todo) {
-  await store.updateTodo(todo.id, { done: !todo.done })
+  try { await store.updateTodo(todo.id, { done: !todo.done }) }
+  catch (error) { notify.error(error.message) }
 }
 </script>
 
 <template>
   <div class="summary-panel" :class="{ fullpage }">
     <div v-if="!fullpage" class="panel-header">
-      <h3><SvgIcon name="sparkles" :size="16" /> 会议助手</h3>
-      <button class="btn-icon" @click="emit('toggle')" title="收起">
+      <h3><SvgIcon name="sparkles" :size="16" /> AI 总结</h3>
+      <button class="btn-icon" title="收起" @click="emit('toggle')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
     </div>
 
     <div class="panel-body">
-      <div class="assistant-status"><span><SvgIcon name="sparkles" :size="15" /> AI 正在整理</span><i></i></div>
-      <!-- 会议概览 -->
-      <div class="summary-section">
-        <div class="section-title"><SvgIcon name="clipboard" :size="14" /> 实时摘要</div>
-        <div class="overview-stats">
-          <div class="stat-item">
-            <div class="stat-value">{{ store.entries.value.length }}</div>
-            <div class="stat-label">记录条数</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">{{ store.persons.value.length }}</div>
-            <div class="stat-label">参会人员</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">{{ store.topics.value.length }}</div>
-            <div class="stat-label">主题数</div>
-          </div>
-        </div>
-        <p class="summary-text">{{ summary }}</p>
+      <div class="assistant-status" :class="{ ready: defaultProvider }">
+        <span><SvgIcon name="sparkles" :size="15" /> {{ defaultProvider ? `默认：${defaultProvider.name}` : '尚未配置 AI 供应商' }}</span><i></i>
       </div>
 
-      <!-- 关键要点 -->
+      <div class="generate-card">
+        <div>
+          <strong>{{ aiSummary ? '重新整理当前会议' : '生成结构化 AI 总结' }}</strong>
+          <p>{{ defaultProvider ? `使用 ${defaultProvider.model}，仅在你点击时发起请求。` : '先配置供应商和 API Key，再生成总结。' }}</p>
+        </div>
+        <button v-if="defaultProvider" class="btn btn-primary" :disabled="generating || !store.entries.value.length" @click="generateSummary">
+          <SvgIcon name="sparkles" :size="14" /> {{ generating ? '生成中…' : (aiSummary ? '重新生成' : '生成总结') }}
+        </button>
+        <button v-else class="btn btn-primary" @click="emit('open-provider-settings')">配置供应商</button>
+      </div>
+
+      <div class="summary-section">
+        <div class="section-title"><SvgIcon name="clipboard" :size="14" /> AI 摘要</div>
+        <div class="overview-stats">
+          <div class="stat-item"><div class="stat-value">{{ store.entries.value.length }}</div><div class="stat-label">记录条数</div></div>
+          <div class="stat-item"><div class="stat-value">{{ store.persons.value.length }}</div><div class="stat-label">参会人员</div></div>
+          <div class="stat-item"><div class="stat-value">{{ store.topics.value.length }}</div><div class="stat-label">主题数</div></div>
+        </div>
+        <p v-if="aiSummary" class="summary-text">{{ aiSummary.summary }}</p>
+        <div v-else class="empty-hint">尚未生成。本功能不会自动调用付费接口，请点击上方按钮开始。</div>
+        <div v-if="aiSummary" class="generated-meta">
+          <span>{{ aiSummary.provider.name }} · {{ aiSummary.provider.model }}</span><span>{{ generatedTime }}</span>
+        </div>
+      </div>
+
       <div class="summary-section">
         <div class="section-title"><SvgIcon name="key" :size="14" /> 关键要点</div>
         <div v-if="keyPoints.length" class="key-points">
-          <div v-for="point in keyPoints" :key="point.id" class="key-point">
-            <span class="point-bullet"></span>
-            <div class="point-content">
-              <p class="point-text">{{ point.text }}</p>
-              <span v-if="point.topic" class="badge badge-purple">{{ point.topic }}</span>
-            </div>
-          </div>
+          <div v-for="point in keyPoints" :key="point.id" class="key-point"><span class="point-bullet"></span><p class="point-text">{{ point.text }}</p></div>
         </div>
-        <div v-else class="empty-hint">暂无要点</div>
+        <div v-else class="empty-hint">生成总结后显示关键要点</div>
       </div>
 
-      <!-- 待办事项 -->
+      <div v-for="sectionItem in detailSections" :key="sectionItem.key" class="summary-section">
+        <div class="section-title"><SvgIcon :name="sectionItem.icon" :size="14" /> {{ sectionItem.title }}</div>
+        <ul class="detail-list"><li v-for="(item, index) in sectionItem.items" :key="index">{{ item }}</li></ul>
+      </div>
+
       <div class="summary-section">
-        <div class="section-title">
-          <SvgIcon name="list-checks" :size="14" /> 待办事项
-          <span class="badge badge-gray">{{ pendingTodos.length }}/{{ store.todos.value.length }}</span>
-        </div>
+        <div class="section-title"><SvgIcon name="list-checks" :size="14" /> 待办事项 <span class="badge badge-gray">{{ pendingTodos.length }}/{{ store.todos.value.length }}</span></div>
         <div v-if="store.todos.value.length" class="todo-list">
           <div v-for="todo in store.todos.value" :key="todo.id" class="todo-item" :class="{ done: todo.done }">
-            <label class="todo-check">
-              <input type="checkbox" :checked="todo.done" @change="toggleTodo(todo)" />
-              <span class="checkmark"></span>
-            </label>
-            <div class="todo-content">
-              <span class="todo-text">{{ todo.content }}</span>
-              <span v-if="assigneeName(todo.assigneeId)" class="todo-assignee">@{{ assigneeName(todo.assigneeId) }}</span>
-            </div>
+            <label class="todo-check"><input type="checkbox" :checked="todo.done" @change="toggleTodo(todo)" /><span class="checkmark"></span></label>
+            <div class="todo-content"><span class="todo-text">{{ todo.content }}</span><span v-if="assigneeName(todo.assigneeId)" class="todo-assignee">@{{ assigneeName(todo.assigneeId) }}</span></div>
           </div>
         </div>
         <div v-else class="empty-hint">暂无待办</div>
       </div>
 
-      <!-- 参会人员 -->
       <div class="summary-section">
         <div class="section-title"><SvgIcon name="users" :size="14" /> 参会人员</div>
-        <div class="attendee-list">
-          <div v-for="(p, index) in store.persons.value" :key="p.id" class="attendee-item">
-            <div class="avatar attendee-avatar-sm" :style="{ background: p.color }">{{ p.name.charAt(0) }}</div>
-            <div class="attendee-info">
-              <span class="attendee-name">{{ p.name }}</span>
-              <span v-if="p.role" class="attendee-role">{{ p.role }}</span>
-            </div>
+        <div v-if="store.persons.value.length" class="attendee-list">
+          <div v-for="(person, index) in store.persons.value" :key="person.id" class="attendee-item">
+            <div class="avatar attendee-avatar-sm" :style="{ background: person.color }">{{ person.name.charAt(0) }}</div>
+            <div class="attendee-info"><span class="attendee-name">{{ person.name }}</span><span v-if="person.role" class="attendee-role">{{ person.role }}</span></div>
             <kbd v-if="index < 9" class="attendee-shortcut">Ctrl+{{ index + 1 }}</kbd>
           </div>
         </div>
+        <div v-else class="empty-hint">暂无参会人员</div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.summary-panel {
-  width: 340px;
-  flex-shrink: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-.summary-panel.fullpage {
-  width: 100%;
-  max-width: 720px;
-  margin: 24px auto;
-  border-left: none;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  overflow: visible;
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.panel-header h3 { font-size: .95rem; font-weight: 700; display: flex; align-items: center; gap: 6px; }
-
-.panel-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #fbfcff; }
-.assistant-status { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border: 1px solid #dbe5fb; border-radius: 9px; background: #f7f9ff; color: var(--primary); font-size: .82rem; font-weight: 650; }
-.assistant-status span { display: flex; align-items: center; gap: 7px; }
-.assistant-status i { width: 7px; height: 7px; border-radius: 50%; background: #65c31d; box-shadow: 0 0 0 3px #eff9e7; }
-
-.summary-section { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: .82rem;
-  font-weight: 700;
-  color: var(--text-secondary);
-  letter-spacing: .1px;
-}
-.section-title .badge { margin-left: auto; text-transform: none; }
-
-.overview-stats {
-  display: flex;
-  gap: 12px;
-}
-.stat-item {
-  flex: 1;
-  text-align: center;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-sm);
-  padding: 10px 4px;
-}
-.stat-value { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
-.stat-label { font-size: .72rem; color: var(--text-muted); }
-
-.summary-text {
-  font-size: .85rem;
-  line-height: 1.7;
-  color: var(--text);
-  background: #f7f9ff;
-  padding: 11px 12px;
-  border-radius: var(--radius-sm);
-  border-left: 3px solid var(--primary);
-}
-
-.key-points { display: flex; flex-direction: column; gap: 8px; }
-.key-point { display: flex; gap: 8px; align-items: flex-start; }
-.point-bullet {
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--primary);
-  margin-top: 7px;
-  flex-shrink: 0;
-}
-.point-content { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.point-text { font-size: .83rem; line-height: 1.5; color: var(--text); }
-
-.todo-list { display: flex; flex-direction: column; gap: 4px; }
-.todo-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 0;
-}
-.todo-check { position: relative; cursor: pointer; flex-shrink: 0; margin-top: 2px; }
-.todo-check input { position: absolute; opacity: 0; width: 16px; height: 16px; cursor: pointer; }
-.checkmark {
-  display: block;
-  width: 16px; height: 16px;
-  border: 2px solid var(--border);
-  border-radius: 4px;
-  transition: var(--transition);
-}
-.todo-check input:checked ~ .checkmark {
-  background: var(--success);
-  border-color: var(--success);
-}
-.todo-check input:checked ~ .checkmark::after {
-  content: '✓';
-  display: block;
-  color: #fff;
-  font-size: 10px;
-  text-align: center;
-  line-height: 12px;
-  font-weight: 700;
-}
-.todo-content { flex: 1; display: flex; flex-direction: column; }
-.todo-text { font-size: .83rem; line-height: 1.5; }
-.todo-item.done .todo-text { text-decoration: line-through; color: var(--text-muted); }
-.todo-assignee { font-size: .72rem; color: var(--primary); font-weight: 500; }
-
-.attendee-list { display: flex; flex-direction: column; gap: 6px; }
-.attendee-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-.attendee-avatar-sm { width: 24px; height: 24px; font-size: .68rem; }
-.attendee-info { display: flex; flex-direction: column; }
-.attendee-name { font-size: .82rem; font-weight: 500; }
-.attendee-role { font-size: .7rem; color: var(--text-muted); }
-.attendee-shortcut {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  color: var(--text-muted);
-  background: var(--bg-secondary);
-  font-family: inherit;
-  font-size: .68rem;
-  line-height: 1.25;
-  white-space: nowrap;
-}
-
-.empty-hint { font-size: .82rem; color: var(--text-muted); padding: 8px 0; }
+.summary-panel { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); }
+.summary-panel.fullpage { width: 100%; max-width: 760px; margin: 24px auto; overflow: visible; border-left: none; border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; padding: 16px 20px; border-bottom: 1px solid var(--border); }.panel-header h3 { display: flex; align-items: center; gap: 6px; font-size: .95rem; font-weight: 700; }
+.panel-body { display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #fbfcff; }
+.assistant-status { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px; border: 1px solid #ead5d2; border-radius: 9px; color: #a84032; background: #fff8f7; font-size: .78rem; font-weight: 650; }.assistant-status.ready { border-color: #dbe5fb; color: var(--primary); background: #f7f9ff; }.assistant-status span { display: flex; align-items: center; gap: 7px; min-width: 0; }.assistant-status i { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: #d36757; box-shadow: 0 0 0 3px #fae9e6; }.assistant-status.ready i { background: #36ad75; box-shadow: 0 0 0 3px #e4f6ed; }
+.generate-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 14px; border: 1px solid #dbe5fb; border-radius: 9px; background: linear-gradient(135deg,#f7f9ff,#f4f8ff); }.generate-card div { min-width: 0; }.generate-card strong { display: block; font-size: .82rem; }.generate-card p { margin-top: 3px; color: var(--text-muted); font-size: .69rem; line-height: 1.45; }.generate-card .btn { flex-shrink: 0; padding: 7px 9px; font-size: .72rem; }
+.summary-section { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }.section-title { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: .82rem; font-weight: 700; }.section-title .badge { margin-left: auto; text-transform: none; }
+.overview-stats { display: flex; gap: 10px; }.stat-item { flex: 1; padding: 9px 4px; border-radius: var(--radius-sm); background: var(--bg-secondary); text-align: center; }.stat-value { color: var(--primary); font-size: 1.2rem; font-weight: 700; }.stat-label { color: var(--text-muted); font-size: .69rem; }
+.summary-text { padding: 11px 12px; border-left: 3px solid var(--primary); border-radius: var(--radius-sm); color: var(--text); background: #f7f9ff; font-size: .83rem; line-height: 1.75; white-space: pre-wrap; }.generated-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: .65rem; }
+.key-points { display: flex; flex-direction: column; gap: 8px; }.key-point { display: flex; align-items: flex-start; gap: 8px; }.point-bullet { width: 6px; height: 6px; flex-shrink: 0; margin-top: 7px; border-radius: 50%; background: var(--primary); }.point-text { color: var(--text); font-size: .81rem; line-height: 1.55; }.detail-list { display: flex; flex-direction: column; gap: 7px; padding-left: 17px; }.detail-list li { color: var(--text); font-size: .81rem; line-height: 1.55; }
+.todo-list { display: flex; flex-direction: column; gap: 4px; }.todo-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }.todo-check { position: relative; flex-shrink: 0; margin-top: 2px; cursor: pointer; }.todo-check input { position: absolute; width: 16px; height: 16px; opacity: 0; cursor: pointer; }.checkmark { display: block; width: 16px; height: 16px; border: 2px solid var(--border); border-radius: 4px; transition: var(--transition); }.todo-check input:checked ~ .checkmark { border-color: var(--success); background: var(--success); }.todo-check input:checked ~ .checkmark::after { content: '✓'; display: block; color: #fff; font-size: 10px; font-weight: 700; line-height: 12px; text-align: center; }.todo-content { flex: 1; display: flex; flex-direction: column; }.todo-text { font-size: .81rem; line-height: 1.5; }.todo-item.done .todo-text { color: var(--text-muted); text-decoration: line-through; }.todo-assignee { color: var(--primary); font-size: .7rem; font-weight: 500; }
+.attendee-list { display: flex; flex-direction: column; gap: 6px; }.attendee-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; }.attendee-avatar-sm { width: 24px; height: 24px; font-size: .68rem; }.attendee-info { display: flex; flex-direction: column; }.attendee-name { font-size: .8rem; font-weight: 500; }.attendee-role { color: var(--text-muted); font-size: .68rem; }.attendee-shortcut { margin-left: auto; padding: 2px 6px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; color: var(--text-muted); background: var(--bg-secondary); font-family: inherit; font-size: .65rem; white-space: nowrap; }
+.empty-hint { padding: 7px 0; color: var(--text-muted); font-size: .78rem; line-height: 1.55; }
+@media (max-width: 700px) { .generated-meta,.generate-card { align-items: flex-start; flex-direction: column; }.generate-card .btn { width: 100%; } }
 </style>

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from './public.decorator';
 import { UserPreferences } from './auth.types';
@@ -27,6 +27,30 @@ export class AuthController {
   @Post('preferences')
   preferences(@Req() request: any, @Body() body: Partial<UserPreferences>) {
     return this.auth.updatePreferences(request.user.id, body || {});
+  }
+
+  @Post('ai-providers')
+  createAiProvider(@Req() request: any, @Body() body: { name?: string; baseUrl?: string; model?: string; apiKey?: string }) {
+    return this.auth.createAiProvider(request.user.id, body || {});
+  }
+
+  @Patch('ai-providers/:id')
+  updateAiProvider(
+    @Req() request: any,
+    @Param('id') id: string,
+    @Body() body: { name?: string; baseUrl?: string; model?: string; apiKey?: string },
+  ) {
+    return this.auth.updateAiProvider(request.user.id, id, body || {});
+  }
+
+  @Delete('ai-providers/:id')
+  deleteAiProvider(@Req() request: any, @Param('id') id: string) {
+    return this.auth.deleteAiProvider(request.user.id, id);
+  }
+
+  @Post('ai-providers/:id/default')
+  setDefaultAiProvider(@Req() request: any, @Param('id') id: string) {
+    return this.auth.setDefaultAiProvider(request.user.id, id);
   }
 
   @Post('logout')

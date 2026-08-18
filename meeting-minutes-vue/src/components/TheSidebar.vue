@@ -92,7 +92,8 @@ function meetingStatus(meeting) {
           <strong>{{ auth.user?.displayName }}</strong>
           <span>@{{ auth.user?.username }}</span>
         </div>
-        <button class="settings-action" @click="showUserMenu = false; emit('open-user-settings')"><SvgIcon name="settings" :size="15" /> 语音转写设置</button>
+        <button class="settings-action" @click="showUserMenu = false; emit('open-user-settings', 'providers')"><SvgIcon name="sparkles" :size="15" /> AI 供应商管理</button>
+        <button class="settings-action" @click="showUserMenu = false; emit('open-user-settings', 'speech')"><SvgIcon name="microphone" :size="15" /> 语音转写设置</button>
         <button @click="emit('logout')"><SvgIcon name="log-out" :size="15" /> 退出登录</button>
       </div>
       <button class="sidebar-footer" @click="showUserMenu = !showUserMenu">
