@@ -10,7 +10,7 @@ const props = defineProps({
   meetingId: { type: String, required: true },
   meetingEnded: Boolean,
 })
-const emit = defineEmits(['status-change'])
+const emit = defineEmits(['status-change', 'transcript-change'])
 const notify = useNotify()
 const { auth } = useAuth()
 const status = ref('idle')
@@ -26,6 +26,7 @@ const recordings = ref([])
 const liveTranscript = ref('')
 const liveTranscribing = ref(false)
 const liveError = ref('')
+watch(liveTranscript, value => emit('transcript-change', value), { immediate: true })
 const audioInputOptions = computed(() => [
   { value: '', label: '系统默认麦克风' },
   ...audioInputs.value.map(device => ({ value: device.id, label: device.label })),

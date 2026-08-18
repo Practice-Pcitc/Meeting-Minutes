@@ -8,22 +8,41 @@ import {
 import { AuthService } from '../auth/auth.service';
 import { StateService } from '../state/state.service';
 import { AiMeetingSummary, MeetingDocument } from '../state/types';
+import { RecordingService } from '../recording/recording.service';
 
 @Injectable()
 export class SummaryService {
   constructor(
     private readonly auth: AuthService,
     private readonly state: StateService,
+    private readonly recordings: RecordingService,
   ) {}
 
-  async generate(userId: string, meetingId: string): Promise<AiMeetingSummary> {
+  async generate(
+    userId: string,
+    meetingId: string,
+    liveTranscriptInput = '',
+    mode: 'live' | 'final' = 'final',
+  ): Promise<AiMeetingSummary> {
     const provider = this.auth.getDefaultAiProvider(userId);
     if (!provider) {
       throw new ServiceUnavailableException('请先在左下角用户菜单中配置并设置默认 AI 供应商');
     }
     const document = this.state.getMeetingDocument(meetingId);
     if (!document) throw new NotFoundException('会议不存在');
-    if (!document.entries.length) throw new BadRequestException('当前会议还没有记录，无法生成 AI 总结');
+    const liveTranscript = String(liveTranscriptInput || '').trim().slice(-16_000);
+    const recordingTranscripts = (await this.recordings.list(meetingId))
+      .filter(recording => recording.transcript?.trim())
+      .slice(-12)
+      .map((recording, index) => ({
+        label: `录音 ${index + 1}`,
+        createdAt: recording.createdAt,
+        text: String(recording.transcript).trim().slice(-4000),
+      }))
+      .filter(recording => recording.text !== liveTranscript);
+    if (!document.entries.length && !recordingTranscripts.length && !liveTranscript) {
+      throw new BadRequestException('当前会议还没有记录或录音转写，无法生成 AI 总结');
+    }
 
     const endpoint = provider.baseUrl.endsWith('/chat/completions')
       ? provider.baseUrl
@@ -44,9 +63,9 @@ export class SummaryService {
           messages: [
             {
               role: 'system',
-              content: '你是严谨的中文会议纪要助手。只输出合法 JSON，不要输出 Markdown。字段必须为 summary、keyPoints、decisions、risks、nextSteps；summary 为字符串，其他字段均为字符串数组。不得编造未在会议内容中出现的事实。',
+              content: `你是严谨的中文会议纪要助手。${mode === 'live' ? '当前会议仍在进行，请生成截至目前的阶段性总结，不要把尚未确认的讨论写成最终决策。' : '请生成会议的结构化总结。'}只输出合法 JSON，不要输出 Markdown。字段必须为 summary、keyPoints、decisions、risks、nextSteps；summary 为字符串，其他字段均为字符串数组。不得编造未在会议内容中出现的事实。`,
             },
-            { role: 'user', content: this.buildPrompt(document) },
+            { role: 'user', content: this.buildPrompt(document, recordingTranscripts, liveTranscript, mode) },
           ],
         }),
         signal: controller.signal,
@@ -73,13 +92,23 @@ export class SummaryService {
     });
   }
 
-  private buildPrompt(document: MeetingDocument): string {
+  private buildPrompt(
+    document: MeetingDocument,
+    recordingTranscripts: Array<{ label: string; createdAt: number; text: string }>,
+    liveTranscript: string,
+    mode: 'live' | 'final',
+  ): string {
     const people = new Map(document.persons.map((person) => [person.id, person.name]));
-    const records = document.entries.slice(0, 200).map((entry, index) => {
+    const records = document.entries.slice(-100).map((entry, index) => {
       const speaker = entry.speakerId ? people.get(entry.speakerId) || '未知人员' : '会议记录';
       const topic = entry.topic ? `；主题：${entry.topic}` : '';
-      return `${index + 1}. [${entry.time}] ${speaker}${topic}：${entry.content.slice(0, 1200)}`;
-    }).join('\n');
+      return `${index + 1}. [${entry.time}] ${speaker}${topic}：${entry.content.slice(0, 800)}`;
+    }).join('\n').slice(-12_000);
+    const manualRecords = records || '无';
+    const audioRecords = recordingTranscripts.map(recording => {
+      const time = new Date(recording.createdAt).toLocaleString('zh-CN', { hour12: false });
+      return `- [${time}] ${recording.label}：${recording.text}`;
+    }).join('\n').slice(-18_000) || '无';
     const todos = document.todos.map((todo) => {
       const assignee = todo.assigneeId ? people.get(todo.assigneeId) || '未知人员' : '未指派';
       return `- [${todo.done ? '已完成' : '待处理'}] ${todo.content}（负责人：${assignee}）`;
@@ -92,12 +121,18 @@ export class SummaryService {
       `地点：${meeting.location || '未设置'}`,
       '',
       '会议记录：',
-      records,
+      manualRecords,
+      '',
+      '已保存录音转写：',
+      audioRecords,
+      ...(liveTranscript ? ['', '当前实时转写（可能仍在修正）：', liveTranscript] : []),
       '',
       '现有待办：',
       todos,
       '',
-      '请提炼简洁摘要、关键要点、已明确决策、风险或阻塞、下一步行动。没有依据的分类返回空数组。',
+      mode === 'live'
+        ? '请提炼截至当前的简洁摘要、关键要点、已明确决策、风险或阻塞、下一步行动，并优先体现最近新增内容。没有依据的分类返回空数组。'
+        : '请提炼简洁摘要、关键要点、已明确决策、风险或阻塞、下一步行动。没有依据的分类返回空数组。',
     ].join('\n');
   }
 

@@ -41,6 +41,7 @@ const userSettingsSection = ref('providers')
 const showSummaryPanel = ref(true)
 const meetingDraft = ref(null)
 const recordingStatus = ref('idle')
+const liveRecordingTranscript = ref('')
 const recorderRef = ref(null)
 const currentTime = ref(Date.now())
 let meetingSaveTimer = null
@@ -48,7 +49,7 @@ let statusClockTimer = window.setInterval(() => { currentTime.value = Date.now()
 
 onBeforeUnmount(() => window.clearInterval(statusClockTimer))
 
-watch(() => store.activeMeetingId.value, () => { recordingStatus.value = 'idle' })
+watch(() => store.activeMeetingId.value, () => { recordingStatus.value = 'idle'; liveRecordingTranscript.value = '' })
 
 function handleRecordingStatusChange(event) {
   if (!event || event.meetingId !== store.activeMeetingId.value) return
@@ -328,14 +329,23 @@ function setMeeting(patch) {
             </div>
             <span class="background-chip" :class="{ active: isCapturing }"><SvgIcon :name="isCapturing ? 'microphone' : 'check-circle'" :size="14" /> {{ recordingStatus === 'recording' ? '后台录音中' : recordingStatus === 'paused' ? '录音已暂停' : '可后台运行' }}</span>
           </div>
-          <AudioRecorder
-            ref="recorderRef"
-            :key="store.activeMeetingId.value"
-            :meeting-id="store.activeMeetingId.value"
-            :meeting-title="store.meeting.value.title"
-            :meeting-ended="meetingEnded"
-            @status-change="handleRecordingStatusChange"
-          />
+          <div class="recording-workspace">
+            <AudioRecorder
+              ref="recorderRef"
+              :key="store.activeMeetingId.value"
+              :meeting-id="store.activeMeetingId.value"
+              :meeting-title="store.meeting.value.title"
+              :meeting-ended="meetingEnded"
+              @status-change="handleRecordingStatusChange"
+              @transcript-change="liveRecordingTranscript = $event"
+            />
+            <SummaryPanel
+              recording-mode
+              :recording-active="isCapturing"
+              :live-transcript="liveRecordingTranscript"
+              @open-provider-settings="openUserSettings('providers')"
+            />
+          </div>
         </div>
 
         <!-- 纪要 Tab -->
@@ -586,12 +596,13 @@ function setMeeting(patch) {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  max-width: 1080px;
+  max-width: 1480px;
   margin: 0 auto 14px;
 }
 .recording-intro h2 { color: #14213a; font-size: 1.16rem; }
 .recording-intro p { margin-top: 2px; color: var(--text-muted); font-size: .78rem; }
-.recording-tab :deep(.audio-recorder) { max-width: 1080px; margin: 0 auto; }
+.recording-workspace { width: 100%; max-width: 1480px; display: grid; grid-template-columns: minmax(0,1fr) 360px; align-items: start; gap: 16px; margin: 0 auto; }
+.recording-workspace :deep(.audio-recorder) { min-width: 0; }
 .background-chip {
   display: inline-flex;
   align-items: center;
@@ -666,5 +677,15 @@ function setMeeting(patch) {
   .recording-intro { align-items: flex-start; }
   .recording-intro p { max-width: 260px; }
   .background-chip { padding: 4px 8px; font-size: .68rem; }
+}
+@media (max-width: 1400px) and (min-width: 1181px) {
+  .recording-workspace { grid-template-columns: minmax(0,1fr) 320px; }
+  .recording-workspace :deep(.wave-area) { display: none; }
+  .recording-workspace :deep(.recorder-main) { gap: 14px; }
+  .recording-workspace :deep(.recorder-control) { padding-inline: 18px; }
+}
+@media (max-width: 1180px) {
+  .recording-workspace { grid-template-columns: 1fr; }
+  .recording-workspace :deep(.summary-panel.recording) { position: static; max-height: none; }
 }
 </style>

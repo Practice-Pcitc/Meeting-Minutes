@@ -4,5 +4,10 @@ import { RecordingService } from './recording.service';
 import { AuthModule } from '../auth/auth.module';
 import { StateModule } from '../state/state.module';
 
-@Module({ imports: [AuthModule, StateModule], controllers: [RecordingController], providers: [RecordingService] })
+@Module({
+  imports: [AuthModule, StateModule],
+  controllers: [RecordingController],
+  providers: [RecordingService],
+  exports: [RecordingService],
+})
 export class RecordingModule {}
