@@ -4,6 +4,7 @@ import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import { getCurrentUserId } from '../auth/request-context';
 import { AuthService } from '../auth/auth.service';
+import { StateService } from '../state/state.service';
 
 export interface TranscriptSegment {
   id: string;
@@ -43,7 +44,10 @@ export interface RecordingInfo {
 
 @Injectable()
 export class RecordingService {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly state: StateService,
+  ) {}
   private readonly root = path.join(process.cwd(), 'data', 'recordings');
   private queues = new Map<string, Promise<void>>();
   private transcriptionQueues = new Map<string, Promise<RecordingInfo>>();
@@ -208,6 +212,45 @@ export class RecordingService {
     return operation;
   }
 
+  async assignSpeaker(meetingId: string, id: string, clusterIdInput: string, personId: string | null) {
+    const info = await this.readInfo(meetingId, id);
+    const clusterId = String(clusterIdInput || '').trim();
+    if (!clusterId || clusterId.length > 100) throw new BadRequestException('说话人编号无效');
+    const hasCluster = (info.transcriptSegments || [])
+      .some(segment => segment.speakerClusterId != null && String(segment.speakerClusterId) === clusterId);
+    if (!hasCluster) throw new BadRequestException('录音中不存在该说话人编号');
+
+    if (personId) {
+      const meeting = this.state.getMeetingDocument(meetingId);
+      if (!meeting) throw new NotFoundException('会议不存在');
+      if (!meeting.persons.some(person => person.id === personId)) {
+        throw new BadRequestException('参会人员不存在');
+      }
+    }
+
+    const now = Date.now();
+    const assignments = (info.speakerAssignments || []).filter(assignment => !(
+      assignment.targetType === 'cluster'
+      && assignment.targetId === clusterId
+      && assignment.source === 'user-confirmed'
+    ));
+    if (personId) {
+      assignments.push({
+        id: uuid(),
+        targetType: 'cluster',
+        targetId: clusterId,
+        personId,
+        source: 'user-confirmed',
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    info.speakerAssignments = assignments;
+    info.updatedAt = now;
+    await fs.writeFile(this.metadataPath(meetingId, id), JSON.stringify(info, null, 2));
+    return info;
+  }
+
   private async performTranscription(meetingId: string, id: string, force: boolean) {
     const info = await this.readInfo(meetingId, id);
     if (!info.completed) throw new BadRequestException('录音尚未结束');
@@ -218,7 +261,11 @@ export class RecordingService {
     const form = new FormData();
     form.append('file', new Blob([file], { type: info.mimeType }), `${id}.${info.extension}`);
     form.append('model', provider === 'funasr' ? (process.env.FUNASR_TRANSCRIBE_MODEL || 'paraformer-zh') : (process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe'));
-    form.append('response_format', 'json');
+    form.append('response_format', provider === 'funasr' ? 'verbose_json' : 'json');
+    if (provider === 'funasr') {
+      form.append('spk', 'true');
+      form.append('timestamp_granularities', 'segment');
+    }
     if (provider === 'openai' && process.env.OPENAI_TRANSCRIBE_LANGUAGE) form.append('language', process.env.OPENAI_TRANSCRIBE_LANGUAGE);
     const apiKey = process.env.OPENAI_API_KEY;
     if (provider === 'openai' && !apiKey) throw new ServiceUnavailableException('服务器尚未配置 OPENAI_API_KEY');

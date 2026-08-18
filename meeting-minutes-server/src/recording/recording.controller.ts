@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Req, Res, StreamableFile } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, Res, StreamableFile } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { RecordingService } from './recording.service';
 
@@ -30,6 +30,16 @@ export class RecordingController {
   @Post(':id/transcribe')
   transcribe(@Param('meetingId') meetingId: string, @Param('id') id: string, @Body() body: { force?: boolean }) {
     return this.recordings.transcribe(meetingId, id, Boolean(body?.force));
+  }
+
+  @Patch(':id/speaker-assignments/:clusterId')
+  assignSpeaker(
+    @Param('meetingId') meetingId: string,
+    @Param('id') id: string,
+    @Param('clusterId') clusterId: string,
+    @Body() body: { personId?: string | null },
+  ) {
+    return this.recordings.assignSpeaker(meetingId, id, clusterId, body?.personId || null);
   }
 
   @Get(':id/audio')
