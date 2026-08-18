@@ -27,7 +27,7 @@ ASR_MODEL = os.getenv(
 )
 PUNC_MODEL = os.getenv(
     "FUNASR_PUNC_MODEL",
-    "iic/punc_ct-transformer_zh-cn-common-vocab272727-onnx",
+    "",
 )
 VAD_MODEL = os.getenv("FUNASR_VAD_MODEL", "iic/speech_fsmn_vad_zh-cn-16k-common-onnx")
 MODEL_REVISION = os.getenv("FUNASR_MODEL_REVISION", "v2.0.5")
@@ -48,7 +48,15 @@ def load_model(model_id: str) -> str:
 def startup() -> None:
     global asr_model, punc_model, vad_model
     asr_dir = load_model(ASR_MODEL)
-    punc_dir = load_model(PUNC_MODEL)
+    # Punctuation is an enhancement, not a prerequisite for recording or ASR.
+    # Some ModelScope revisions advertise files that temporarily return 404;
+    # keep the speech service available and return unpunctuated text instead of
+    # failing the whole FastAPI startup in that situation.
+    try:
+        punc_dir = load_model(PUNC_MODEL) if PUNC_MODEL else None
+    except Exception as error:
+        punc_dir = None
+        print(f"Warning: punctuation model unavailable, continuing without it: {error}", file=sys.stderr)
     vad_dir = load_model(VAD_MODEL)
     asr_model = Paraformer(
         asr_dir,
@@ -57,13 +65,14 @@ def startup() -> None:
         quantize=Path(asr_dir, "model_quant.onnx").exists(),
         intra_op_num_threads=THREADS,
     )
-    punc_model = CT_Transformer(
-        punc_dir,
-        batch_size=1,
-        device_id=-1,
-        quantize=Path(punc_dir, "model_quant.onnx").exists(),
-        intra_op_num_threads=THREADS,
-    )
+    if punc_dir:
+        punc_model = CT_Transformer(
+            punc_dir,
+            batch_size=1,
+            device_id=-1,
+            quantize=Path(punc_dir, "model_quant.onnx").exists(),
+            intra_op_num_threads=THREADS,
+        )
     vad_model = Fsmn_vad(
         vad_dir,
         batch_size=1,
