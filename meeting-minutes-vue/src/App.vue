@@ -39,6 +39,7 @@ const showNewMeetingModal = ref(false)
 const showUserSettingsModal = ref(false)
 const userSettingsSection = ref('providers')
 const showSummaryPanel = ref(true)
+const showLiveSummary = ref(false) // 录音工作台右侧实时总结面板，默认关闭，需手动开启
 const meetingDraft = ref(null)
 const recordingStatus = ref('idle')
 const liveRecordingTranscript = ref('')
@@ -49,7 +50,8 @@ let statusClockTimer = window.setInterval(() => { currentTime.value = Date.now()
 
 onBeforeUnmount(() => window.clearInterval(statusClockTimer))
 
-watch(() => store.activeMeetingId.value, () => { recordingStatus.value = 'idle'; liveRecordingTranscript.value = '' })
+watch(() => store.activeMeetingId.value, () => { recordingStatus.value = 'idle'; liveRecordingTranscript.value = ''; showLiveSummary.value = false })
+function toggleLiveSummary() { showLiveSummary.value = !showLiveSummary.value }
 
 function handleRecordingStatusChange(event) {
   if (!event || event.meetingId !== store.activeMeetingId.value) return
@@ -327,7 +329,12 @@ function setMeeting(patch) {
               <h2>录音工作台</h2>
               <p>录音、播放、时间轴与转写集中在一个工作区。</p>
             </div>
-            <span class="background-chip" :class="{ active: isCapturing }"><SvgIcon :name="isCapturing ? 'microphone' : 'check-circle'" :size="14" /> {{ recordingStatus === 'recording' ? '后台录音中' : recordingStatus === 'paused' ? '录音已暂停' : '可后台运行' }}</span>
+            <span class="recording-intro-actions">
+              <button class="btn" :class="showLiveSummary ? 'btn-ghost' : 'btn-primary'" @click="toggleLiveSummary">
+                <SvgIcon name="sparkles" :size="14" /> {{ showLiveSummary ? '关闭实时总结' : '开启实时总结' }}
+              </button>
+              <span class="background-chip" :class="{ active: isCapturing }"><SvgIcon :name="isCapturing ? 'microphone' : 'check-circle'" :size="14" /> {{ recordingStatus === 'recording' ? '后台录音中' : recordingStatus === 'paused' ? '录音已暂停' : '可后台运行' }}</span>
+            </span>
           </div>
           <div class="recording-workspace">
             <AudioRecorder
@@ -339,12 +346,16 @@ function setMeeting(patch) {
               @status-change="handleRecordingStatusChange"
               @transcript-change="liveRecordingTranscript = $event"
             />
-            <SummaryPanel
-              recording-mode
-              :recording-active="isCapturing"
-              :live-transcript="liveRecordingTranscript"
-              @open-provider-settings="openUserSettings('providers')"
-            />
+            <transition name="slide-right">
+              <SummaryPanel
+                v-if="showLiveSummary"
+                recording-mode
+                :recording-active="isCapturing"
+                :live-transcript="liveRecordingTranscript"
+                :meeting-ended="meetingEnded"
+                @open-provider-settings="openUserSettings('providers')"
+              />
+            </transition>
           </div>
         </div>
 
@@ -603,6 +614,8 @@ function setMeeting(patch) {
 .recording-intro p { margin-top: 2px; color: var(--text-muted); font-size: .78rem; }
 .recording-workspace { width: 100%; max-width: 1480px; display: grid; grid-template-columns: minmax(0,1fr) 360px; align-items: start; gap: 16px; margin: 0 auto; }
 .recording-workspace :deep(.audio-recorder) { min-width: 0; }
+.recording-intro-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.recording-intro-actions .btn { padding: 6px 10px; font-size: .74rem; white-space: nowrap; }
 .background-chip {
   display: inline-flex;
   align-items: center;
@@ -676,6 +689,7 @@ function setMeeting(patch) {
   .recording-tab { padding: 16px; }
   .recording-intro { align-items: flex-start; }
   .recording-intro p { max-width: 260px; }
+  .recording-intro-actions { flex-wrap: wrap; }
   .background-chip { padding: 4px 8px; font-size: .68rem; }
 }
 @media (max-width: 1400px) and (min-width: 1181px) {

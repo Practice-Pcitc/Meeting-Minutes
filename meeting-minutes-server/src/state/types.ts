@@ -11,6 +11,20 @@ export interface Meeting {
   location: string;
   status: 'active' | 'ended';
   aiSummary?: AiMeetingSummary;
+  /** 实时 AI 总结运行状态：idle | waiting | summarizing | success | error | ended */
+  aiStatus?: AiStatus;
+  /** 增量总结维护的会议 AI 状态 */
+  aiState?: MeetingAiState;
+  /** 阶段总结快照历史 */
+  aiSnapshots?: AiSummarySnapshot[];
+  /** 已处理的转写/记录时间指针（createdAt 晚于该值视为新增） */
+  aiProcessedUntil?: number;
+  /** 已纳入总结的实时转写字符数 */
+  aiLiveProcessedLen?: number;
+  /** 前端最近一次上报的实时转写 */
+  aiLiveTranscript?: string;
+  /** 最近一次总结失败原因（仅用于诊断） */
+  aiLastError?: string;
 }
 
 export interface AiMeetingSummary {
@@ -26,6 +40,42 @@ export interface AiMeetingSummary {
   };
   generatedAt: number;
 }
+
+/** AI 识别出的行动项 */
+export interface AiTodoItem {
+  owner: string;   // 负责人，未明确时为空字符串
+  task: string;    // 任务内容
+  deadline: string; // 截止时间，未明确时为空字符串
+  status: 'pending' | 'done';
+}
+
+/** 增量总结维护的会议 AI 状态（结构字段名与 DeepSeek 输出 JSON 对齐） */
+export interface MeetingAiState {
+  current_topic: string;
+  latest_summary: string;
+  key_points: string[];
+  decisions: string[];
+  todos: AiTodoItem[];
+  open_questions: string[];
+  participants_views: string[];
+  updated_at: number; // 时间戳（ms）
+}
+
+/** 每次 AI 成功更新后保存的阶段快照 */
+export interface AiSummarySnapshot {
+  id: string;
+  meeting_id: string;
+  current_topic: string;
+  latest_summary: string;
+  key_points: string[];
+  decisions: string[];
+  todos: AiTodoItem[];
+  open_questions: string[];
+  participants_views: string[];
+  created_at: number;
+}
+
+export type AiStatus = 'idle' | 'waiting' | 'summarizing' | 'success' | 'error' | 'ended';
 
 export interface Person {
   id: string;

@@ -3,8 +3,8 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import {
-  AiMeetingSummary, AppState, emptyState, emptyMeetingDocument, Meeting, MeetingDocument, MeetingSummary,
-  Person, Entry, TopicTag, Todo, Label, StatePayload, WorkspaceState,
+  AiMeetingSummary, AiStatus, AiSummarySnapshot, AppState, emptyState, emptyMeetingDocument, Meeting, MeetingAiState,
+  MeetingDocument, MeetingSummary, Person, Entry, TopicTag, Todo, Label, StatePayload, WorkspaceState,
 } from './types';
 import { getCurrentUserId } from '../auth/request-context';
 
@@ -154,8 +154,14 @@ export class StateService implements OnModuleInit {
   private normalizeDocument(raw: any): MeetingDocument {
     const id = raw?.meeting?.id || uuid();
     const empty = emptyMeetingDocument(id);
+    const meeting = { ...empty.meeting, ...(raw.meeting || {}), id } as any;
+    // 兼容 / 兜底：实时 AI 总结相关字段
+    if (typeof meeting.aiStatus !== 'string') meeting.aiStatus = 'idle';
+    if (!Array.isArray(meeting.aiSnapshots)) meeting.aiSnapshots = [];
+    if (meeting.aiState && typeof meeting.aiState !== 'object') delete meeting.aiState;
+    if (meeting.aiSummary && typeof meeting.aiSummary !== 'object') delete meeting.aiSummary;
     return {
-      meeting: { ...empty.meeting, ...(raw.meeting || {}), id },
+      meeting,
       persons: Array.isArray(raw.persons) ? raw.persons : [],
       entries: Array.isArray(raw.entries) ? raw.entries : [],
       topics: Array.isArray(raw.topics) ? raw.topics : [],
@@ -198,6 +204,40 @@ export class StateService implements OnModuleInit {
     document.updatedAt = Date.now();
     this.persist();
     return JSON.parse(JSON.stringify(summary));
+  }
+
+  /** 实时 AI 总结运行数据（状态 / 会议状态 / 快照 / 转写指针）增量更新 */
+  updateMeetingAi(
+    id: string,
+    patch: Partial<{
+      aiStatus: AiStatus;
+      aiState: MeetingAiState | null;
+      aiSnapshots: AiSummarySnapshot[];
+      aiProcessedUntil: number;
+      aiLiveProcessedLen: number;
+      aiLiveTranscript: string;
+      aiLastError: string;
+    }>,
+  ) {
+    const document = this.workspace.meetings.find((item) => item.meeting.id === id);
+    if (!document) throw new BadRequestException('会议不存在');
+    const meeting = document.meeting as any;
+    for (const key of ['aiStatus', 'aiProcessedUntil', 'aiLiveProcessedLen', 'aiLiveTranscript', 'aiLastError'] as const) {
+      if (patch[key] !== undefined) meeting[key] = patch[key];
+    }
+    if (patch.aiSnapshots !== undefined) meeting.aiSnapshots = patch.aiSnapshots;
+    if (patch.aiState === null || patch.aiState === undefined) delete meeting.aiState;
+    else if (typeof patch.aiState === 'object') meeting.aiState = patch.aiState;
+    document.updatedAt = Date.now();
+    this.persist();
+    return {
+      aiStatus: meeting.aiStatus,
+      aiState: meeting.aiState || null,
+      aiSnapshots: meeting.aiSnapshots || [],
+      aiProcessedUntil: meeting.aiProcessedUntil || 0,
+      aiLiveProcessedLen: meeting.aiLiveProcessedLen || 0,
+      aiLiveTranscript: meeting.aiLiveTranscript || '',
+    };
   }
 
   reset(): StatePayload {
