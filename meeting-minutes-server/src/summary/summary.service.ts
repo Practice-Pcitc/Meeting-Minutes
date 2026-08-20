@@ -577,6 +577,7 @@ export class SummaryService {
       decisions: strings(parsed.decisions),
       todos,
       open_questions: strings(parsed.open_questions),
+      participants_views: strings(parsed.participants_views),
       risks: strings(parsed.risks),
       timeline: strings(parsed.timeline),
     };

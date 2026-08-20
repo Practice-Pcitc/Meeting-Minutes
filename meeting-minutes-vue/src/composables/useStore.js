@@ -23,6 +23,7 @@ function emptyState() {
     seats: [],
     activeMeetingId: '',
     meetings: [],
+    personLibrary: [],
   };
 }
 
@@ -103,6 +104,19 @@ async function updatePerson(id, patch) {
 
 async function removePerson(id) {
   return mutate('DELETE', `/persons/${id}`);
+}
+
+// ===== 系统级人员库 =====
+async function addLibraryPerson(input) {
+  return mutate('POST', '/person-library', input);
+}
+
+async function updateLibraryPerson(id, patch) {
+  return mutate('PATCH', `/person-library/${id}`, patch);
+}
+
+async function removeLibraryPerson(id) {
+  return mutate('DELETE', `/person-library/${id}`);
 }
 
 async function addEntry(input) {
@@ -192,6 +206,7 @@ const seats = computed(() => state.data.seats || []);
 const meeting = computed(() => state.data.meeting);
 const meetings = computed(() => state.data.meetings || []);
 const activeMeetingId = computed(() => state.data.activeMeetingId || state.data.meeting.id);
+const personLibrary = computed(() => state.data.personLibrary || []);
 
 function getPerson(id) {
   return personMap.value.get(id) || null;
@@ -215,6 +230,7 @@ export function useStore() {
     todos,
     labels,
     seats,
+    personLibrary,
     personMap,
     getPerson,
     loadAll,
@@ -225,6 +241,9 @@ export function useStore() {
     addPerson,
     updatePerson,
     removePerson,
+    addLibraryPerson,
+    updateLibraryPerson,
+    removeLibraryPerson,
     addEntry,
     updateEntry,
     removeEntry,

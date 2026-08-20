@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, HttpCode, NotFoundException } from '@nestjs/common';
 import { StateService } from './state.service';
-import { Meeting, Person, Entry, TopicTag, Todo, Label } from './types';
+import { Meeting, Person, Entry, TopicTag, Todo, Label, LibraryPerson } from './types';
 
 @Controller('api')
 export class StateController {
@@ -24,7 +24,7 @@ export class StateController {
   }
 
   @Post('meetings')
-  createMeeting(@Body() body: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean }) {
+  createMeeting(@Body() body: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean; libraryPersonIds?: string[] }) {
     return this.svc.createMeeting(body || {});
   }
 
@@ -91,6 +91,30 @@ export class StateController {
   @HttpCode(204)
   removePerson(@Param('id') id: string) {
     if (!this.svc.removePerson(id)) throw new NotFoundException('人员不存在');
+  }
+
+  // ===== 系统级人员库 =====
+  @Get('person-library')
+  listLibrary() {
+    return this.svc.listLibrary();
+  }
+
+  @Post('person-library')
+  addLibraryPerson(@Body() body: Omit<LibraryPerson, 'id' | 'createdAt' | 'updatedAt'>) {
+    return this.svc.addLibraryPerson(body);
+  }
+
+  @Patch('person-library/:id')
+  updateLibraryPerson(@Param('id') id: string, @Body() body: Partial<Omit<LibraryPerson, 'id' | 'createdAt'>>) {
+    const p = this.svc.updateLibraryPerson(id, body);
+    if (!p) throw new NotFoundException('人员不存在');
+    return p;
+  }
+
+  @Delete('person-library/:id')
+  @HttpCode(204)
+  removeLibraryPerson(@Param('id') id: string) {
+    if (!this.svc.removeLibraryPerson(id)) throw new NotFoundException('人员不存在');
   }
 
   // ===== 记录 =====

@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import {
-  AiMeetingSummary, AiStatus, AiSummarySnapshot, AppState, emptyState, emptyMeetingDocument, Meeting, MeetingAiState,
+  AiMeetingSummary, AiStatus, AiSummarySnapshot, AppState, emptyState, emptyMeetingDocument, LibraryPerson, Meeting, MeetingAiState,
   MeetingDocument, MeetingSummary, Person, Entry, TopicTag, Todo, Label, StatePayload, WorkspaceState,
 } from './types';
 import { getCurrentUserId } from '../auth/request-context';
@@ -55,7 +55,7 @@ export class StateService implements OnModuleInit {
       const activeMeetingId = meetings.some((item) => item.meeting.id === raw.activeMeetingId)
         ? raw.activeMeetingId
         : meetings[0].meeting.id;
-      return { activeMeetingId, meetings };
+      return { activeMeetingId, meetings, personLibrary: this.normalizeLibrary(raw.personLibrary) };
     }
 
     let legacyState: AppState;
@@ -103,7 +103,7 @@ export class StateService implements OnModuleInit {
     const id = legacyState.meeting.id && legacyState.meeting.id !== 'default' ? legacyState.meeting.id : uuid();
     legacyState.meeting.id = id;
     const now = Date.now();
-    return { activeMeetingId: id, meetings: [{ ...legacyState, createdAt: now, updatedAt: now }] };
+    return { activeMeetingId: id, meetings: [{ ...legacyState, createdAt: now, updatedAt: now }], personLibrary: this.normalizeLibrary(raw.personLibrary) };
   }
 
   private persist() {
@@ -148,7 +148,23 @@ export class StateService implements OnModuleInit {
   }
 
   private newWorkspace(): WorkspaceState {
-    return { activeMeetingId: '', meetings: [] };
+    return { activeMeetingId: '', meetings: [], personLibrary: [] };
+  }
+
+  /** 兼容 / 兜底：人员库字段（旧数据没有 personLibrary） */
+  private normalizeLibrary(raw: any): LibraryPerson[] {
+    if (!Array.isArray(raw)) return [];
+    const now = Date.now();
+    return raw
+      .filter((item: any) => item && typeof item === 'object' && typeof item.name === 'string' && item.name.trim())
+      .map((item: any) => ({
+        id: typeof item.id === 'string' && item.id ? item.id : uuid(),
+        name: String(item.name).trim(),
+        role: typeof item.role === 'string' ? item.role : '',
+        color: typeof item.color === 'string' && item.color ? item.color : this.randomColor(),
+        createdAt: Number(item.createdAt) || now,
+        updatedAt: Number(item.updatedAt) || now,
+      }));
   }
 
   private normalizeDocument(raw: any): MeetingDocument {
@@ -189,6 +205,7 @@ export class StateService implements OnModuleInit {
       seats: current.seats,
       activeMeetingId: this.workspace.activeMeetingId,
       meetings: this.listMeetings(),
+      personLibrary: this.listLibrary(),
     }));
   }
 
@@ -270,7 +287,7 @@ export class StateService implements OnModuleInit {
       }));
   }
 
-  createMeeting(input: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean } = {}): StatePayload {
+  createMeeting(input: { title?: string; date?: string; startTime?: string; endTime?: string; location?: string; copyPersons?: boolean; copySeats?: boolean; libraryPersonIds?: string[] } = {}): StatePayload {
     const previous = this.state;
     const id = uuid();
     const document = emptyMeetingDocument(id, input.title || '');
@@ -290,6 +307,17 @@ export class StateService implements OnModuleInit {
           .map((seat) => ({ ...seat, personId: personIdMap.get(seat.personId)! }));
       }
     }
+    // 从系统人员库直接带入人员
+    if (Array.isArray(input.libraryPersonIds) && input.libraryPersonIds.length) {
+      const existing = new Set(document.persons.map((p) => p.name.toLocaleLowerCase()));
+      for (const libId of input.libraryPersonIds) {
+        const lib = this.workspace.personLibrary.find((item) => item.id === libId);
+        if (!lib) continue;
+        if (existing.has(lib.name.toLocaleLowerCase())) continue;
+        existing.add(lib.name.toLocaleLowerCase());
+        document.persons.push({ id: uuid(), name: lib.name, role: lib.role, color: lib.color });
+      }
+    }
     this.workspace.meetings.push(document);
     this.workspace.activeMeetingId = id;
     this.persist();
@@ -307,8 +335,11 @@ export class StateService implements OnModuleInit {
     const index = this.workspace.meetings.findIndex((item) => item.meeting.id === id);
     if (index < 0) return null;
     this.workspace.meetings.splice(index, 1);
-    if (!this.workspace.meetings.length) this.workspace = this.newWorkspace();
-    else if (this.workspace.activeMeetingId === id) {
+    if (!this.workspace.meetings.length) {
+      // 保留系统级人员库，只清空会议列表
+      this.workspace.meetings = [];
+      this.workspace.activeMeetingId = '';
+    } else if (this.workspace.activeMeetingId === id) {
       this.workspace.activeMeetingId = [...this.workspace.meetings].sort((a, b) => b.updatedAt - a.updatedAt)[0].meeting.id;
     }
     this.persist();
@@ -372,6 +403,7 @@ export class StateService implements OnModuleInit {
       color: input.color || this.randomColor(),
     };
     this.state.persons.push(person);
+    this.syncPersonToLibrary(person);
     this.persist();
     return person;
   }
@@ -389,6 +421,7 @@ export class StateService implements OnModuleInit {
     }
     if (updates.role !== undefined) p.role = updates.role.trim();
     if (updates.color !== undefined) p.color = updates.color;
+    this.syncPersonToLibrary(p);
     this.persist();
     return { ...p };
   }
@@ -406,6 +439,86 @@ export class StateService implements OnModuleInit {
     });
     this.state.seats = this.state.seats.filter((seat) => seat.personId !== id);
     if (this.state.persons.length !== before) {
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  // ========== 系统级人员库 ==========
+
+  listLibrary(): LibraryPerson[] {
+    return [...this.workspace.personLibrary];
+  }
+
+  /** 会议内人员变动时同步进人员库（同名则更新，否则新增） */
+  private syncPersonToLibrary(person: Person) {
+    const library = this.workspace.personLibrary;
+    const index = library.findIndex((item) => item.name.toLocaleLowerCase() === person.name.toLocaleLowerCase());
+    const now = Date.now();
+    if (index >= 0) {
+      library[index] = {
+        ...library[index],
+        name: person.name,
+        role: person.role || library[index].role,
+        color: person.color || library[index].color,
+        updatedAt: now,
+      };
+    } else {
+      library.push({
+        id: uuid(),
+        name: person.name,
+        role: person.role,
+        color: person.color,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+
+  /** 直接向人员库新增条目（不自动加入当前会议） */
+  addLibraryPerson(input: Omit<LibraryPerson, 'id' | 'createdAt' | 'updatedAt'>): LibraryPerson {
+    const name = (input.name || '').trim();
+    if (!name) throw new BadRequestException('姓名不能为空');
+    if (this.workspace.personLibrary.some((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      throw new BadRequestException('该人员已在人员库中');
+    }
+    const now = Date.now();
+    const item: LibraryPerson = {
+      id: uuid(),
+      name,
+      role: (input.role || '').trim(),
+      color: input.color || this.randomColor(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.workspace.personLibrary.push(item);
+    this.persist();
+    return { ...item };
+  }
+
+  updateLibraryPerson(id: string, updates: Partial<Omit<LibraryPerson, 'id' | 'createdAt'>>): LibraryPerson | null {
+    const item = this.workspace.personLibrary.find((x) => x.id === id);
+    if (!item) return null;
+    if (updates.name !== undefined) {
+      const name = updates.name.trim();
+      if (!name) throw new BadRequestException('姓名不能为空');
+      if (this.workspace.personLibrary.some((x) => x.id !== id && x.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+        throw new BadRequestException('该人员已在人员库中');
+      }
+      item.name = name;
+    }
+    if (updates.role !== undefined) item.role = updates.role.trim();
+    if (updates.color !== undefined) item.color = updates.color;
+    item.updatedAt = Date.now();
+    this.persist();
+    return { ...item };
+  }
+
+  removeLibraryPerson(id: string): boolean {
+    const before = this.workspace.personLibrary.length;
+    this.workspace.personLibrary = this.workspace.personLibrary.filter((item) => item.id !== id);
+    if (this.workspace.personLibrary.length !== before) {
       this.persist();
       return true;
     }

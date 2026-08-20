@@ -151,14 +151,27 @@ export interface MeetingSummary {
   updatedAt: number;
 }
 
+/** 人员库条目（系统级，跨会议共享） */
+export interface LibraryPerson {
+  id: string;
+  name: string;
+  role: string;
+  color: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface WorkspaceState {
   activeMeetingId: string;
   meetings: MeetingDocument[];
+  /** 系统级人员库：在该用户所有会议间共享 */
+  personLibrary: LibraryPerson[];
 }
 
 export interface StatePayload extends AppState {
   activeMeetingId: string;
   meetings: MeetingSummary[];
+  personLibrary: LibraryPerson[];
 }
 
 export const emptyState = (id = 'default'): AppState => ({
