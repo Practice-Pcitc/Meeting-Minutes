@@ -20,7 +20,7 @@ export interface SpeakerAssignment {
   targetType: 'segment' | 'cluster';
   targetId: string;
   personId: string;
-  source: 'manual-anchor' | 'diarization' | 'user-confirmed';
+  source: 'manual-anchor' | 'diarization' | 'propagated' | 'user-confirmed';
   confidence?: number;
   createdAt: number;
   updatedAt: number;
@@ -51,6 +51,7 @@ export class RecordingService {
   private readonly root = path.join(process.cwd(), 'data', 'recordings');
   private queues = new Map<string, Promise<void>>();
   private transcriptionQueues = new Map<string, Promise<RecordingInfo>>();
+  private metadataQueues = new Map<string, Promise<void>>();
 
   private safe(value: string, label: string) {
     if (!value || !/^[a-zA-Z0-9_-]+$/.test(value)) throw new BadRequestException(`${label}无效`);
@@ -212,7 +213,28 @@ export class RecordingService {
     return operation;
   }
 
-  async assignSpeaker(meetingId: string, id: string, clusterIdInput: string, personId: string | null) {
+  async assignSpeaker(meetingId: string, id: string, clusterIdInput: string, personId: string | null, manual = true) {
+    return this.withMetadataQueue(meetingId, id, () => (
+      this.performSpeakerAssignment(meetingId, id, clusterIdInput, personId, manual)
+    ));
+  }
+
+  private async withMetadataQueue<T>(meetingId: string, id: string, action: () => Promise<T>) {
+    const key = `${getCurrentUserId()}:${meetingId}:${id}`;
+    const previous = this.metadataQueues.get(key) || Promise.resolve();
+    const operation = previous
+      .catch(() => undefined)
+      .then(action);
+    const tail = operation.then(() => undefined, () => undefined);
+    this.metadataQueues.set(key, tail);
+    try {
+      return await operation;
+    } finally {
+      if (this.metadataQueues.get(key) === tail) this.metadataQueues.delete(key);
+    }
+  }
+
+  private async performSpeakerAssignment(meetingId: string, id: string, clusterIdInput: string, personId: string | null, manual: boolean) {
     const info = await this.readInfo(meetingId, id);
     const clusterId = String(clusterIdInput || '').trim();
     if (!clusterId || clusterId.length > 100) throw new BadRequestException('说话人编号无效');
@@ -229,18 +251,25 @@ export class RecordingService {
     }
 
     const now = Date.now();
-    const assignments = (info.speakerAssignments || []).filter(assignment => !(
+    const hasManualAssignment = (info.speakerAssignments || []).some(assignment => (
       assignment.targetType === 'cluster'
       && assignment.targetId === clusterId
       && assignment.source === 'user-confirmed'
     ));
-    if (personId) {
+    if (!manual && hasManualAssignment) return info;
+
+    const assignments = (info.speakerAssignments || []).filter(assignment => !(
+      assignment.targetType === 'cluster'
+      && assignment.targetId === clusterId
+      && (assignment.source === 'user-confirmed' || assignment.source === 'propagated')
+    ));
+    if (personId || manual) {
       assignments.push({
         id: uuid(),
         targetType: 'cluster',
         targetId: clusterId,
-        personId,
-        source: 'user-confirmed',
+        personId: personId || '',
+        source: manual ? 'user-confirmed' : 'propagated',
         createdAt: now,
         updatedAt: now,
       });
@@ -278,12 +307,15 @@ export class RecordingService {
     }
     const result: any = await response.json().catch(() => null);
     if (!response.ok) throw new ServiceUnavailableException(result?.error?.message || result?.message || `语音转写失败（${response.status}）`);
-    info.transcript = String(result?.text || '').trim();
-    info.transcriptSegments = this.resultSegments(info, info.transcript, result);
-    info.transcribedAt = Date.now();
-    info.updatedAt = Date.now();
-    await fs.writeFile(this.metadataPath(meetingId, id), JSON.stringify(info, null, 2));
-    return info;
+    return this.withMetadataQueue(meetingId, id, async () => {
+      const latest = await this.readInfo(meetingId, id);
+      latest.transcript = String(result?.text || '').trim();
+      latest.transcriptSegments = this.resultSegments(latest, latest.transcript, result);
+      latest.transcribedAt = Date.now();
+      latest.updatedAt = Date.now();
+      await fs.writeFile(this.metadataPath(meetingId, id), JSON.stringify(latest, null, 2));
+      return latest;
+    });
   }
 
   async remove(meetingId: string, id: string) {

@@ -348,7 +348,7 @@ async function toggleTodo(todo) {
     </div>
 
     <div class="panel-body">
-      <div class="assistant-status" :class="{ ready: defaultProvider }">
+      <div v-if="!recordingMode" class="assistant-status" :class="{ ready: defaultProvider }">
         <span><SvgIcon name="sparkles" :size="15" /> {{ defaultProvider ? `默认：${defaultProvider.name}` : '尚未配置 AI 供应商' }}</span><i></i>
       </div>
 

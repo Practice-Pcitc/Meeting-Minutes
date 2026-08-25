@@ -37,9 +37,9 @@ export class RecordingController {
     @Param('meetingId') meetingId: string,
     @Param('id') id: string,
     @Param('clusterId') clusterId: string,
-    @Body() body: { personId?: string | null },
+    @Body() body: { personId?: string | null; manual?: boolean },
   ) {
-    return this.recordings.assignSpeaker(meetingId, id, clusterId, body?.personId || null);
+    return this.recordings.assignSpeaker(meetingId, id, clusterId, body?.personId || null, body?.manual !== false);
   }
 
   @Get(':id/audio')

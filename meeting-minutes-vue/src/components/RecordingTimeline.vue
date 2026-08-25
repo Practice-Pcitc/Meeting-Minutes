@@ -6,6 +6,7 @@ import { authFetch, authRequest } from '../composables/useAuth'
 import { useNotify } from '../composables/useNotify'
 import { useStore } from '../composables/useStore'
 import AppSelect from './AppSelect.vue'
+import { applySpeakerAssignmentTargets, resolveSpeakerIdentity, speakerAssignmentTargets } from '../utils/speakerAssignments'
 
 const props = defineProps({
   recordings: { type: Array, default: () => [] },
@@ -31,14 +32,15 @@ const transcribing = ref(false)
 const speakerSaving = ref('')
 const visibleStart = ref(0)
 const visibleEnd = ref(0)
-const transcriptView = ref('segments')
+const transcriptView = ref('dialogue')
+const speakerMappingCollapsed = ref(false)
 const focusedSegmentId = ref('')
 const showManualEntries = ref(true)
 const hoveredEntryId = ref('')
 const selectedEntryId = ref('')
 const urls = new Map()
 const mergedSegmentElements = new Map()
-const transcriptItemElements = new Map()
+const dialogueTurnElements = new Map()
 const audio = new Audio()
 let timeline = null
 let suppressRangeSync = false
@@ -85,6 +87,10 @@ function clusterColor(recordingId, clusterId) {
   for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0
   return palette[Math.abs(hash) % palette.length]
 }
+function speakerCode(index) {
+  const value = Math.max(1, Number(index) || 1)
+  return value <= 26 ? String.fromCharCode(64 + value) : `A${value - 26}`
+}
 function clusterOrder(item, clusterId) {
   const ids = [...new Set((item.transcriptSegments || [])
     .filter(segment => segment.speakerClusterId != null)
@@ -107,7 +113,9 @@ const speakerClusters = computed(() => sorted.value.flatMap((item, itemIndex) =>
       item,
       clusterId,
       personId: assignment?.personId || '',
-      label: `录音 ${itemIndex + 1} · 说话人 ${clusterIndex + 1}`,
+      manuallyAssigned: assignment?.source === 'user-confirmed',
+      speakerCode: speakerCode(clusterIndex + 1),
+      label: `录音 ${itemIndex + 1} · 说话人 ${speakerCode(clusterIndex + 1)}`,
       count: matches.length,
       sample: matches[0]?.text || '',
       color: clusterColor(item.id, clusterId),
@@ -193,23 +201,21 @@ const manualSegmentAnchors = computed(() => {
   return matches
 })
 function storedSpeakerPerson(segment) {
-  const priorities = { diarization: 1, 'manual-anchor': 2, 'user-confirmed': 3 }
+  const priorities = { diarization: 1, propagated: 2, 'manual-anchor': 2, 'user-confirmed': 3 }
   const assignments = Array.isArray(segment.item.speakerAssignments) ? segment.item.speakerAssignments : []
   const match = assignments
     .filter(assignment => (assignment.targetType === 'segment' && assignment.targetId === segment.baseSegmentId)
       || (assignment.targetType === 'cluster' && segment.speakerClusterId != null && assignment.targetId === String(segment.speakerClusterId)))
     .sort((a, b) => (priorities[b.source] || 0) - (priorities[a.source] || 0))[0]
   const person = match?.personId ? store.getPerson(match.personId) : null
-  return person ? { person, assignment: match } : null
+  return match ? { person, assignment: match } : null
 }
 const mergedDisplaySegments = computed(() => {
   let previousSpeakerKey = ''
   return mergedTranscriptSegments.value.map(segment => {
     const anchor = manualSegmentAnchors.value.get(segment.id)
     const stored = storedSpeakerPerson(segment)
-    const preferStored = stored?.assignment?.source === 'user-confirmed'
-    const person = preferStored ? stored.person : (anchor?.person || stored?.person || null)
-    const source = preferStored || (!anchor && stored) ? stored?.assignment?.source : (anchor ? 'manual-anchor' : '')
+    const { person, source } = resolveSpeakerIdentity(stored, anchor)
     const anonymous = !person && segment.speakerClusterId != null
     const anonymousNumber = anonymous ? clusterOrder(segment.item, segment.speakerClusterId) : 0
     const speakerKey = person ? `person:${person.id}` : anonymous ? `cluster:${segment.item.id}:${segment.speakerClusterId}` : ''
@@ -218,15 +224,58 @@ const mergedDisplaySegments = computed(() => {
     return {
       ...segment,
       person,
+      speakerKey,
+      speakerLabel: person?.name || (anonymous ? `说话人 ${speakerCode(anonymousNumber)}` : '说话人未区分'),
       showAvatar,
-      avatarText: person?.name?.charAt(0) || (anonymous ? `S${anonymousNumber}` : ''),
+      avatarText: person?.name?.charAt(0) || (anonymous ? speakerCode(anonymousNumber) : '?'),
       avatarTitle: person
-        ? `${source === 'user-confirmed' ? '已确认发言人' : source === 'diarization' ? '说话人识别关联' : '手动记录关联'} · ${person.name}`
+        ? `${source === 'user-confirmed' ? '已确认发言人' : source === 'propagated' ? '同字母同步关联' : source === 'diarization' ? '说话人识别关联' : '手动记录关联'} · ${person.name}`
         : anonymous ? `匿名说话人 ${anonymousNumber}，可在上方确认身份` : '',
       avatarColor: person?.color || (anonymous ? clusterColor(segment.item.id, segment.speakerClusterId) : '#6f7f99'),
     }
   })
 })
+const dialogueTurns = computed(() => {
+  const turns = []
+  for (const segment of mergedDisplaySegments.value) {
+    const currentSpeakerKey = segment.speakerKey || `unknown:${segment.item.id}`
+    const previous = turns.at(-1)
+    const canMerge = Boolean(segment.speakerKey)
+      && previous
+      && previous.item.id === segment.item.id
+      && previous.speakerKey === currentSpeakerKey
+      && segment.timestamp - previous.endTimestamp <= 15000
+      && previous.text.length + segment.text.length <= 220
+    if (canMerge) {
+      previous.text += segment.text
+      previous.endTimestamp = segment.endTimestamp
+      previous.endOffset = segment.endOffset
+      previous.segmentIds.push(segment.id)
+      if (segment.timingSource === 'estimated') previous.timingSource = 'estimated'
+      continue
+    }
+    turns.push({
+      id: `turn:${segment.id}`,
+      item: segment.item,
+      speakerKey: currentSpeakerKey,
+      speakerLabel: segment.speakerLabel,
+      avatarText: segment.avatarText,
+      avatarColor: segment.avatarColor,
+      avatarTitle: segment.avatarTitle,
+      text: segment.text,
+      timestamp: segment.timestamp,
+      endTimestamp: segment.endTimestamp,
+      offset: segment.offset,
+      endOffset: segment.endOffset,
+      timingSource: segment.timingSource,
+      segmentIds: [segment.id],
+    })
+  }
+  return turns
+})
+function isDialogueTurnHighlighted(turn) {
+  return turn.segmentIds.includes(highlightedSegmentId.value)
+}
 function entrySpeaker(entry) { return entry.speakerId ? store.getPerson(entry.speakerId) : null }
 function entrySpeakerName(entry) { return entrySpeaker(entry)?.name || '会议记录' }
 function entryColor(entry) {
@@ -280,6 +329,9 @@ function formatTime(timestamp, withDate = false) {
   return new Date(timestamp).toLocaleString('zh-CN', withDate
     ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }
     : { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+function formatClockTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 function axisDate(value) { return typeof value?.toDate === 'function' ? value.toDate() : new Date(value) }
 function axisMinorLabel(value, scale) {
@@ -454,9 +506,9 @@ function setMergedSegmentElement(id, element) {
   if (element) mergedSegmentElements.set(id, element)
   else mergedSegmentElements.delete(id)
 }
-function setTranscriptItemElement(id, element) {
-  if (element) transcriptItemElements.set(id, element)
-  else transcriptItemElements.delete(id)
+function setDialogueTurnElement(id, element) {
+  if (element) dialogueTurnElements.set(id, element)
+  else dialogueTurnElements.delete(id)
 }
 async function locateManualEntry(entry) {
   selectedEntryId.value = entry.id
@@ -517,28 +569,42 @@ async function transcribeAll(force = false) {
 async function assignSpeaker(cluster, personId) {
   speakerSaving.value = cluster.key
   try {
-    await authRequest(
-      'PATCH',
-      `/meetings/${props.meetingId}/recordings/${cluster.item.id}/speaker-assignments/${encodeURIComponent(cluster.clusterId)}`,
-      { personId: personId || null },
-    )
+    const targets = speakerAssignmentTargets(speakerClusters.value, cluster, personId)
+    await applySpeakerAssignmentTargets(targets, cluster.key, (target, manual) => authRequest(
+        'PATCH',
+        `/meetings/${props.meetingId}/recordings/${target.item.id}/speaker-assignments/${encodeURIComponent(target.clusterId)}`,
+        { personId: personId || null, manual },
+      ))
     emit('changed')
-    notify.success(personId ? '说话人身份已确认' : '说话人身份已清除')
-  } catch (error) { notify.error(error.message) }
+    if (!personId) notify.success('说话人身份已清除')
+    else if (targets.length > 1) notify.success(`说话人身份已确认，并同步 ${targets.length - 1} 个未手工调整的${cluster.speakerCode}分组`)
+    else notify.success('说话人身份已确认；其他同字母分组均已手工调整')
+  } catch (error) {
+    if (error.savedCount > 0) {
+      emit('changed')
+      notify.error(`已保存 ${error.savedCount} 个分组，其余同步失败：${error.message}`)
+    } else notify.error(error.message)
+  }
   finally { speakerSaving.value = '' }
 }
 
 watch([() => props.recordings, () => store.entries.value, showManualEntries], renderTimeline, { deep: true })
 watch([activeId, selectedEntryId, playbackEntryId], () => { if (timeline) timeline.setItems(buildItems()) })
 watch(highlightedSegmentId, async id => {
-  if (!id || transcriptView.value !== 'merged') return
+  if (!id) return
   await nextTick()
-  mergedSegmentElements.get(id)?.scrollIntoView({ block: 'nearest', behavior: playing.value ? 'smooth' : 'auto' })
+  if (transcriptView.value === 'merged') {
+    mergedSegmentElements.get(id)?.scrollIntoView({ block: 'nearest', behavior: playing.value ? 'smooth' : 'auto' })
+    return
+  }
+  const turn = dialogueTurns.value.find(candidate => candidate.segmentIds.includes(id))
+  if (turn) dialogueTurnElements.get(turn.id)?.scrollIntoView({ block: 'nearest', behavior: playing.value ? 'smooth' : 'auto' })
 })
 watch([activeId, transcriptView], async ([id, view]) => {
-  if (!id || view !== 'segments') return
+  if (!id || view !== 'dialogue') return
   await nextTick()
-  transcriptItemElements.get(id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  const turn = dialogueTurns.value.find(candidate => candidate.item.id === id)
+  if (turn) dialogueTurnElements.get(turn.id)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 })
 onMounted(renderTimeline)
 onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => URL.revokeObjectURL(url)) })
@@ -592,11 +658,11 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 
     <section v-if="sorted.length || liveActive || visibleManualEntries.length" class="transcript-panel">
       <div class="transcript-heading">
-        <div><h4>转写记录</h4><span>{{ transcriptCount ? `已生成 ${transcriptCount} 段文字，点击段落即可播放` : '实时文字和历史转写将统一显示在这里' }}</span></div>
+        <div><h4>转写记录</h4><span>{{ transcriptCount ? `已整理 ${dialogueTurns.length} 条发言，点击任一条即可播放` : '实时文字和历史转写将统一显示在这里' }}</span></div>
         <div class="transcript-toolbar">
           <div class="transcript-view-switcher" role="tablist" aria-label="转写视图">
-            <button :class="{ active: transcriptView === 'segments' }" role="tab" :aria-selected="transcriptView === 'segments'" @click="transcriptView = 'segments'">时间分段</button>
-            <button :class="{ active: transcriptView === 'merged' }" role="tab" :aria-selected="transcriptView === 'merged'" @click="transcriptView = 'merged'">合并文本</button>
+            <button :class="{ active: transcriptView === 'dialogue' }" role="tab" :aria-selected="transcriptView === 'dialogue'" @click="transcriptView = 'dialogue'">对话记录</button>
+            <button :class="{ active: transcriptView === 'merged' }" role="tab" :aria-selected="transcriptView === 'merged'" @click="transcriptView = 'merged'">全文</button>
           </div>
           <div class="transcript-actions">
             <button v-if="sorted.some(item => !item.transcript)" :disabled="transcribing" @click="transcribeAll(false)"><SvgIcon name="file-text" :size="14" />{{ transcribing ? '转写中…' : '转写未完成片段' }}</button>
@@ -604,51 +670,65 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
           </div>
         </div>
       </div>
-      <div v-if="transcriptView === 'segments'" class="transcript-list">
-        <button v-for="(item, index) in sorted" :key="item.id" :ref="element => setTranscriptItemElement(item.id, element)" class="transcript-item" :class="{ active: activeId === item.id }" @click="playItem(item)">
-          <span class="transcript-time"><time>{{ formatTime(item.createdAt) }}</time><small>{{ formatDuration(itemDuration(item)) }}</small></span>
-          <span class="transcript-marker"></span>
-          <span class="transcript-copy"><strong>录音 {{ index + 1 }}</strong><span v-if="item.transcript">{{ item.transcript }}</span><em v-else>尚未生成文字</em></span>
-        </button>
-        <div v-if="liveActive" class="transcript-item live-item">
-          <span class="transcript-time"><time>现在</time><small>{{ liveTranscribing ? '识别中' : '实时' }}</small></span>
-          <span class="transcript-marker"></span>
-          <span class="transcript-copy">
-            <strong><i></i>实时转写</strong>
-            <span v-if="liveTranscript">{{ liveTranscript }}</span>
-            <em v-else-if="!localTranscription">云端引擎不进行滚动转写，避免产生重复费用。</em>
-            <em v-else-if="liveError" class="live-error">{{ liveError }}</em>
-            <em v-else>开始说话后，文字会在这里持续出现…</em>
-          </span>
-        </div>
-      </div>
-      <div v-else class="merged-view">
-        <div v-if="speakerClusters.length" class="speaker-mapping-panel">
-          <div class="speaker-mapping-heading">
-            <div><strong>确认说话人</strong><span>系统先区分匿名声音，请将编号关联到本次会议的参会人员。</span></div>
+      <div v-if="speakerClusters.length" class="speaker-mapping-panel" :class="{ collapsed: speakerMappingCollapsed }">
+        <div class="speaker-mapping-heading">
+          <div><strong>确认说话人</strong><span>系统先区分匿名声音，请将字母关联到本次会议的参会人员。</span></div>
+          <button
+            class="speaker-mapping-toggle"
+            type="button"
+            :aria-expanded="!speakerMappingCollapsed"
+            :aria-label="speakerMappingCollapsed ? '展开确认说话人' : '收起确认说话人'"
+            @click="speakerMappingCollapsed = !speakerMappingCollapsed"
+          >
             <span>{{ speakerClusters.length }} 位匿名说话人</span>
-          </div>
-          <div class="speaker-mapping-grid">
-            <div v-for="cluster in speakerClusters" :key="cluster.key" class="speaker-mapping-item">
-              <span class="speaker-cluster-avatar" :style="{ '--speaker-color': cluster.color }">S{{ cluster.label.split('说话人 ')[1] }}</span>
-              <div class="speaker-cluster-copy"><strong>{{ cluster.label }}</strong><span>{{ cluster.count }} 段 · {{ cluster.sample }}</span></div>
-              <div class="speaker-person-select">
-                <AppSelect
-                  :model-value="cluster.personId"
-                  :options="speakerOptions"
-                  :disabled="speakerSaving === cluster.key"
-                  :clearable="false"
-                  placeholder="选择参会人员"
-                  @update:model-value="assignSpeaker(cluster, $event)"
-                />
-              </div>
+            <i aria-hidden="true"></i>
+          </button>
+        </div>
+        <div v-show="!speakerMappingCollapsed" class="speaker-mapping-grid">
+          <div v-for="cluster in speakerClusters" :key="cluster.key" class="speaker-mapping-item">
+            <span class="speaker-cluster-avatar" :style="{ '--speaker-color': cluster.color }">{{ cluster.speakerCode }}</span>
+            <div class="speaker-cluster-copy"><strong>{{ cluster.label }}</strong><span>{{ cluster.count }} 段 · {{ cluster.sample }}</span></div>
+            <div class="speaker-person-select">
+              <AppSelect
+                :model-value="cluster.personId"
+                :options="speakerOptions"
+                :disabled="Boolean(speakerSaving)"
+                :clearable="false"
+                placeholder="选择参会人员"
+                @update:model-value="assignSpeaker(cluster, $event)"
+              />
             </div>
           </div>
         </div>
-        <div v-else-if="transcriptCount" class="speaker-unavailable-note">
-          <span>S</span>
-          <div><strong>当前转写没有说话人编号</strong><small>使用启用了 CAM++ 的 FunASR 服务后点击“重新转写”，即可区分匿名说话人并在这里确认身份。</small></div>
+      </div>
+      <div v-else-if="transcriptCount" class="speaker-unavailable-note">
+        <span>?</span>
+        <div><strong>当前转写还没有区分说话人</strong><small>旧记录仍会按时间拆成短句；启用带说话人分离的转写服务并点击“重新转写”后，可显示说话人 A、B。</small></div>
+      </div>
+      <div v-if="transcriptView === 'dialogue'" class="dialogue-list">
+        <button
+          v-for="turn in dialogueTurns"
+          :key="turn.id"
+          :ref="element => setDialogueTurnElement(turn.id, element)"
+          class="dialogue-item"
+          :class="{ highlighted: isDialogueTurnHighlighted(turn) }"
+          :title="`${formatTime(turn.timestamp, true)}，点击播放`"
+          @mouseenter="focusedSegmentId = turn.segmentIds[0]"
+          @focus="focusedSegmentId = turn.segmentIds[0]"
+          @click="playItem(turn.item, turn.offset)"
+        >
+          <span class="dialogue-time"><time>{{ formatClockTime(turn.timestamp) }}</time><small v-if="turn.timingSource === 'estimated'">约</small></span>
+          <span class="dialogue-avatar" :style="{ '--avatar-color': turn.avatarColor }" :title="turn.avatarTitle">{{ turn.avatarText }}</span>
+          <span class="dialogue-copy"><strong>{{ turn.speakerLabel }}</strong><span>【{{ turn.text }}】</span></span>
+        </button>
+        <div v-if="liveActive" class="dialogue-item dialogue-live">
+          <span class="dialogue-time"><time>现在</time><small>{{ liveTranscribing ? '识别中' : '实时' }}</small></span>
+          <span class="dialogue-avatar">·</span>
+          <span class="dialogue-copy"><strong>实时转写</strong><span>{{ liveTranscript || liveError || '开始说话后，文字会在这里持续出现…' }}</span></span>
         </div>
+        <div v-if="!dialogueTurns.length && !liveActive" class="merged-empty"><SvgIcon name="file-text" :size="20" /><span>暂无转写内容</span></div>
+      </div>
+      <div v-else class="merged-view">
         <div class="merged-transcript" @mouseleave="clearMergedHover">
         <div v-if="mergedDisplaySegments.length" class="merged-copy">
           <template v-for="segment in mergedDisplaySegments" :key="segment.id">
@@ -679,7 +759,7 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 
 <style scoped>
 .recording-timeline { border-top: 1px solid var(--border-light); }
-.timeline-section { padding: 20px 24px 18px; }
+.timeline-section { padding: 16px 20px 14px; }
 .timeline-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 .timeline-heading h3,.transcript-heading h4 { color: #14213a; font-size: .94rem; }
 .timeline-heading p,.transcript-heading span { margin-top: 2px; color: var(--text-muted); font-size: .71rem; }
@@ -687,7 +767,7 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .manual-toggle span { width: 7px; height: 7px; border-radius: 2px; background: #aeb7c6; transform: rotate(45deg); }
 .manual-toggle.active { border-color: var(--primary-soft); color: var(--primary); background: var(--primary-light); }
 .manual-toggle.active span { background: var(--primary); }
-.transport-bar { min-height: 54px; display: flex; align-items: center; gap: 11px; margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border-light); border-radius: 10px; background: #fafbfc; }
+.transport-bar { min-height: 48px; display: flex; align-items: center; gap: 11px; margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border-light); border-radius: 10px; background: #fafbfc; }
 .master-play { width: 36px; height: 36px; display: grid; place-items: center; flex: none; border-radius: 50%; color: #fff; background: var(--primary); box-shadow: 0 4px 10px rgba(40,100,240,.2); }
 .master-play:hover { background: var(--primary-hover); }
 .master-play:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
@@ -701,7 +781,7 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .zoom-controls .fit-button { font-size: .7rem; white-space: nowrap; }
 .active-actions { display: flex; gap: 5px; padding-left: 7px; border-left: 1px solid var(--border); }
 .active-actions button.danger:hover { border-color: #ffd5ce; color: var(--danger); background: var(--danger-light); }
-.vis-timeline-host { height: 158px; border: 1px solid #dfe5ee; border-radius: 9px; overflow: hidden; background: #fbfcfe; }
+.vis-timeline-host { height: 132px; border: 1px solid #dfe5ee; border-radius: 9px; overflow: hidden; background: #fbfcfe; }
 .vis-timeline-host :deep(.vis-timeline) { border: 0; font-family: inherit; }
 .vis-timeline-host :deep(.vis-panel.vis-center),.vis-timeline-host :deep(.vis-panel.vis-bottom) { border-color: #e5e9f1; }
 .vis-timeline-host :deep(.vis-labelset .vis-label) { color: #778197; border-bottom-color: #edf0f5; background: #f7f9fc; font-size: 10px; font-weight: 600; }
@@ -734,7 +814,7 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .timeline-empty div { display: flex; flex-direction: column; }
 .timeline-empty strong { color: var(--text-secondary); font-size: .8rem; }
 .timeline-empty div span { font-size: .7rem; }
-.transcript-panel { padding: 18px 24px 22px; border-top: 1px solid var(--border-light); }
+.transcript-panel { padding: 16px 20px 20px; border-top: 1px solid var(--border-light); }
 .transcript-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
 .transcript-toolbar { display: flex; align-items: center; gap: 10px; }
 .transcript-view-switcher { display: flex; align-items: center; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: #f5f7fa; }
@@ -745,32 +825,32 @@ onBeforeUnmount(() => { audio.pause(); timeline?.destroy(); urls.forEach(url => 
 .transcript-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 7px; color: var(--primary); font-size: .7rem; font-weight: 550; }
 .transcript-actions button:hover { background: var(--primary-light); }
 .transcript-actions button:disabled { opacity: .55; cursor: wait; }
-.transcript-list { position: relative; max-height: 330px; overflow-y: auto; padding-right: 5px; }
-.transcript-list::before { content: ''; position: absolute; top: 15px; bottom: 15px; left: 84px; width: 1px; background: #e5e9f0; }
-.transcript-item { position: relative; width: 100%; display: grid; grid-template-columns: 68px 12px minmax(0,1fr); align-items: start; gap: 10px; padding: 11px 10px 11px 0; border-radius: 8px; text-align: left; transition: background .16s ease; }
-button.transcript-item:hover,button.transcript-item.active { background: #f5f7fb; }
-button.transcript-item.active { box-shadow: inset 3px 0 0 var(--primary); }
-.transcript-time { display: flex; flex-direction: column; padding-top: 1px; text-align: right; font-variant-numeric: tabular-nums; }
-.transcript-time time { color: var(--text-secondary); font-size: .69rem; }
-.transcript-time small { color: var(--text-muted); font-size: .62rem; }
-.transcript-marker { z-index: 1; width: 8px; height: 8px; margin-top: 5px; border: 2px solid var(--surface); border-radius: 50%; background: #aeb8c8; box-shadow: 0 0 0 1px #d8dee8; }
-.transcript-item.active .transcript-marker { background: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
-.transcript-copy { min-width: 0; display: flex; flex-direction: column; color: var(--text); font-size: .8rem; line-height: 1.65; }
-.transcript-copy strong { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; color: var(--text-secondary); font-size: .68rem; font-weight: 600; }
-.transcript-copy em { color: var(--text-muted); font-style: normal; }
-.live-item { background: linear-gradient(90deg,rgba(40,100,240,.045),transparent); }
-.live-item .transcript-marker { background: #ef4760; box-shadow: 0 0 0 3px rgba(239,71,96,.12); }
-.live-item .transcript-copy strong { color: var(--primary); }
-.live-item .transcript-copy strong i { width: 6px; height: 6px; border-radius: 50%; background: #ef4760; animation: livePulse 1.4s ease-out infinite; }
-.live-item .live-error { color: var(--danger); }
+.dialogue-list { max-height: 520px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 5px 2px 1px; scroll-behavior: smooth; }
+.dialogue-item { width: 100%; display: grid; grid-template-columns: 58px 34px minmax(0,1fr); align-items: start; gap: 10px; padding: 11px 13px; border: 1px solid #e5e9f1; border-radius: 10px; color: var(--text); background: #fff; text-align: left; transition: border-color .16s ease,background .16s ease,box-shadow .16s ease; }
+button.dialogue-item:hover,button.dialogue-item:focus-visible,button.dialogue-item.highlighted { outline: none; border-color: #b9cdfb; background: #f7f9ff; box-shadow: 0 3px 10px rgba(40,100,240,.08); }
+.dialogue-time { display: flex; flex-direction: column; align-items: flex-end; padding-top: 3px; font-variant-numeric: tabular-nums; }
+.dialogue-time time { color: #2d3a52; font-size: .75rem; font-weight: 650; }
+.dialogue-time small { color: var(--text-muted); font-size: .6rem; }
+.dialogue-avatar { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--avatar-color,#7c8aa3); font-size: .7rem; font-weight: 750; box-shadow: 0 0 0 3px color-mix(in srgb,var(--avatar-color,#7c8aa3) 12%,transparent); }
+.dialogue-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dialogue-copy strong { color: #293750; font-size: .72rem; font-weight: 700; }
+.dialogue-copy span { color: #3c4658; font-size: .82rem; line-height: 1.72; overflow-wrap: anywhere; }
+.dialogue-live { border-style: dashed; background: linear-gradient(90deg,rgba(40,100,240,.05),transparent); }
+.dialogue-live .dialogue-avatar { background: #ef4760; box-shadow: 0 0 0 3px rgba(239,71,96,.12); }
 .merged-transcript { max-height: 350px; overflow-y: auto; padding: 18px 20px; border: 1px solid #e4e8ef; border-radius: 10px; background: #fcfcfd; scroll-behavior: smooth; }
 .merged-view { display: flex; flex-direction: column; gap: 10px; }
-.speaker-mapping-panel { padding: 13px; border: 1px solid #dfe5f4; border-radius: 10px; background: #f8faff; }
+.speaker-mapping-panel { margin-bottom: 10px; padding: 13px; border: 1px solid #dfe5f4; border-radius: 10px; background: #f8faff; }
 .speaker-mapping-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
 .speaker-mapping-heading>div { min-width: 0; display: flex; flex-direction: column; }
 .speaker-mapping-heading strong { color: #27344c; font-size: .76rem; }
 .speaker-mapping-heading span { overflow: hidden; color: var(--text-muted); font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
-.speaker-mapping-heading>span { flex: none; padding: 3px 7px; border-radius: 999px; color: var(--primary); background: var(--primary-light); }
+.speaker-mapping-panel.collapsed .speaker-mapping-heading { margin-bottom: 0; }
+.speaker-mapping-toggle { min-height: 26px; display: inline-flex; align-items: center; gap: 8px; flex: none; padding: 3px 9px; border-radius: 999px; color: var(--primary); background: var(--primary-light); }
+.speaker-mapping-toggle:hover { background: #e5edff; }
+.speaker-mapping-toggle:focus-visible { outline: 2px solid var(--primary-soft); outline-offset: 2px; }
+.speaker-mapping-toggle span { color: inherit; }
+.speaker-mapping-toggle i { width: 7px; height: 7px; flex: 0 0 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(2px) rotate(225deg); transition: transform .16s ease; }
+.speaker-mapping-panel.collapsed .speaker-mapping-toggle i { transform: translateY(-2px) rotate(45deg); }
 .speaker-mapping-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
 .speaker-mapping-item { min-width: 0; display: grid; grid-template-columns: 30px minmax(0,1fr) 170px; align-items: center; gap: 9px; padding: 8px; border: 1px solid #e7eaf1; border-radius: 8px; background: #fff; }
 .speaker-cluster-avatar { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--speaker-color); font-size: .62rem; font-weight: 750; }
@@ -779,7 +859,7 @@ button.transcript-item.active { box-shadow: inset 3px 0 0 var(--primary); }
 .speaker-cluster-copy span { overflow: hidden; color: var(--text-muted); font-size: .64rem; text-overflow: ellipsis; white-space: nowrap; }
 .speaker-person-select { min-width: 0; }
 .speaker-person-select :deep(.select-trigger) { height: 32px; padding: 0 10px; }
-.speaker-unavailable-note { display: flex; align-items: center; gap: 9px; padding: 9px 11px; border: 1px dashed #d9dfeb; border-radius: 9px; color: var(--text-muted); background: #fafbfc; }
+.speaker-unavailable-note { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; padding: 9px 11px; border: 1px dashed #d9dfeb; border-radius: 9px; color: var(--text-muted); background: #fafbfc; }
 .speaker-unavailable-note>span { width: 25px; height: 25px; display: grid; place-items: center; flex: none; border-radius: 50%; color: #fff; background: #a7b0bf; font-size: .65rem; font-weight: 750; }
 .speaker-unavailable-note>div { min-width: 0; display: flex; flex-direction: column; }
 .speaker-unavailable-note strong { color: var(--text-secondary); font-size: .7rem; }
@@ -795,11 +875,11 @@ button.transcript-item.active { box-shadow: inset 3px 0 0 var(--primary); }
 .merged-live.active { color: #174bbf; background: var(--primary-light); }
 .merged-live i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #ef4760; vertical-align: 1px; }
 .merged-live.active i { animation: livePulse 1.4s ease-out infinite; }
-.merged-avatar { width: 22px; height: 22px; display: inline-grid; place-items: center; margin: 0 5px 0 8px; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--avatar-color); box-shadow: 0 0 0 1px color-mix(in srgb,var(--avatar-color) 24%,transparent); font-size: .65rem; font-weight: 700; line-height: 1; vertical-align: -6px; }
+.merged-avatar { width: 22px; height: 22px; display: inline-grid; place-items: center; margin: 0 5px 0 8px; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--avatar-color); box-shadow: 0 0 0 1px color-mix(in srgb,var(--avatar-color) 24%,transparent); font-size: .65rem; font-weight: 700; line-height: 1; vertical-align: middle; transform: translateY(-1.75px); }
 .merged-avatar:first-child { margin-left: 0; }
 .merged-empty { min-height: 86px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); font-size: .76rem; }
 @keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(239,71,96,.4); } 70%,100% { box-shadow: 0 0 0 5px rgba(239,71,96,0); } }
 @media (max-width: 980px) { .speaker-mapping-grid { grid-template-columns: 1fr; } }
 @media (max-width: 860px) { .transport-bar { flex-wrap: wrap; }.zoom-controls { order: 3; width: 100%; margin-left: 47px; }.zoom-controls input { flex: 1; }.active-actions { margin-left: auto; } }
-@media (max-width: 620px) { .timeline-section,.transcript-panel { padding: 16px; }.transport-bar { align-items: flex-start; }.playback-copy { min-width: 0; flex: 1; }.zoom-controls { margin-left: 0; }.active-actions { padding-left: 0; border-left: 0; }.timeline-hint { flex-direction: column; gap: 2px; }.transcript-heading { align-items: flex-start; flex-direction: column; gap: 8px; }.transcript-toolbar { width: 100%; justify-content: space-between; }.transcript-list::before { left: 68px; }.transcript-item { grid-template-columns: 52px 10px minmax(0,1fr); gap: 7px; }.overview-wrap { grid-template-columns: 40px minmax(0,1fr) 40px; }.speaker-mapping-heading { flex-direction: column; gap: 6px; }.speaker-mapping-item { grid-template-columns: 30px minmax(0,1fr); }.speaker-person-select { grid-column: 1 / -1; }.merged-transcript { padding: 14px; }.merged-copy { font-size: .82rem; line-height: 1.95; } }
+@media (max-width: 620px) { .timeline-section,.transcript-panel { padding: 16px; }.transport-bar { align-items: flex-start; }.playback-copy { min-width: 0; flex: 1; }.zoom-controls { margin-left: 0; }.active-actions { padding-left: 0; border-left: 0; }.timeline-hint { flex-direction: column; gap: 2px; }.transcript-heading { align-items: flex-start; flex-direction: column; gap: 8px; }.transcript-toolbar { width: 100%; justify-content: space-between; }.dialogue-item { grid-template-columns: 48px 30px minmax(0,1fr); gap: 7px; padding: 10px 8px; }.dialogue-avatar { width: 27px; height: 27px; }.overview-wrap { grid-template-columns: 40px minmax(0,1fr) 40px; }.speaker-mapping-heading { flex-direction: column; gap: 6px; }.speaker-mapping-item { grid-template-columns: 30px minmax(0,1fr); }.speaker-person-select { grid-column: 1 / -1; }.merged-transcript { padding: 14px; }.merged-copy { font-size: .82rem; line-height: 1.95; } }
 </style>

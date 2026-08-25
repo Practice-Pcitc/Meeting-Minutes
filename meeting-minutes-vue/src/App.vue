@@ -694,8 +694,6 @@ function setMeeting(patch) {
 }
 @media (max-width: 1400px) and (min-width: 1181px) {
   .recording-workspace { grid-template-columns: minmax(0,1fr) 320px; }
-  .recording-workspace :deep(.wave-area) { display: none; }
-  .recording-workspace :deep(.recorder-main) { gap: 14px; }
   .recording-workspace :deep(.recorder-control) { padding-inline: 18px; }
 }
 @media (max-width: 1180px) {
